@@ -37,6 +37,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 //#include "tCrypt.h"
 #include "tException.h"
 #include <memory>
+#include <string>
 
 class nSocket;
 class nAddress;
@@ -120,9 +121,13 @@ nNetState sn_GetNetState();
 void sn_SetNetState(nNetState x);
 void sn_DisconnectUser(int i, const tOutput& reason, nServerInfoBase * redirectTo = 0 ); //!< terminate connection with user i (peacefully)
 void sn_KickUser(int i, const tOutput& reason, REAL severity = 1, nServerInfoBase * redirectTo = 0 );   //!< throw out user i (violently)
+void sn_DisconnectPeer(nAddress const & peer, const tOutput& reason); //!< server: disconnect the user at peer, if any (its transport closed)
+bool sn_IsPeerConnected(nAddress const & peer); //!< server: true if a logged in user is at peer
 
 void sn_GetAdr(int user,  tString& name);
 unsigned int sn_GetPort(int user);
+bool sn_IsVirtualPeer(int user);    //!< true when the user is reached through an nTransport (browser client), not a socket
+std::string sn_PeerTicket(int user); //!< the private room ticket the user's transport connection brought, empty if none
 unsigned int sn_GetServerPort();
 int sn_NumUsers();
 int sn_MaxUsers();
@@ -507,6 +512,7 @@ public:
 
     nMessage& operator >> (tString &s);
     nMessage& operator >> (tColoredString &s);
+    nMessage& ReadUtf8 (tColoredString &s);       //!< a chat line from a client that writes UTF-8: as >>, but well formed UTF-8 stays whole (tools/tUtf8.h)
     nMessage& operator << (const tString &s);
     nMessage& operator << (const tColoredString &s);
     nMessage& operator << (const tOutput &o);

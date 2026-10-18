@@ -414,6 +414,7 @@ public:
     nLoginProcess( int userID )
     : nMachineDecorator( nMachine::GetMachine( userID ) )
     , checkAddress( true )
+    , virtualPeer( false )
     {
         // install self reference to keep this object alive
         selfReference_ = this;
@@ -529,6 +530,9 @@ private:
 
     //! flag indicating whether the sent server address needs checking
     bool checkAddress;
+
+    //! the sender is reached through a transport (browser client), not a socket
+    bool virtualPeer;
 };
 
 
@@ -1168,6 +1172,7 @@ void nLoginProcess::ProcessClientAnswer( nMessage & m )
 
     // store peer address
     sn_GetAdr( m.SenderID(), peerAddress );
+    virtualPeer = sn_IsVirtualPeer( m.SenderID() );
 
     // and go on
     nMemberFunctionRunner::ScheduleMayBlock( *this, &nLoginProcess::Authorize, authority != "" );
@@ -1175,6 +1180,13 @@ void nLoginProcess::ProcessClientAnswer( nMessage & m )
 
 static bool sn_trustLAN = false;
 static tSettingItem< bool > sn_TrustLANConf( "TRUST_LAN", sn_trustLAN );
+
+// "host:port" -> "host"
+static tString sn_HostPart( tString const & address )
+{
+    int const colon = address.StrPos( ":" );
+    return colon > 0 ? address.SubStr( 0, colon ) : address;
+}
 
 // sanity check the server address
 bool nLoginProcess::CheckServerAddress()
@@ -1240,6 +1252,20 @@ bool nLoginProcess::CheckServerAddress()
     {
         // all's well
         return true;
+    }
+
+    // a browser client (reached through a transport, not a socket) connected
+    // to a signalling URL and sends its host:port; there is no UDP port to
+    // match (a deployment may proxy wss through 443), so the host alone must
+    // match SERVER_DNS (as given or resolved) or our known address
+    if ( virtualPeer )
+    {
+        tString const host = sn_HostPart( serverAddress );
+        if ( host.Len() > 1 && !host.StartsWith( "*" ) &&
+             ( host == sn_GetMyDNSName() || host == sn_HostPart( trueServerAddress ) || host == sn_HostPart( sn_GetMyAddress() ) ) )
+        {
+            return true;
+        }
     }
 
     // Z-Man: can't remember what this swapping is for. Possibly to accept

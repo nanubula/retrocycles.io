@@ -90,7 +90,7 @@ public:
     virtual bool Writable();
 
     static void s_SendConfig(bool force=true, int peer=-1);
-    void          SendConfig(bool force=true, int peer=-1);
+    virtual void  SendConfig(bool force=true, int peer=-1); //!< peer -1 broadcasts
 
     static void s_RevertToDefaults();       //!< revert all settings to defaults defined in the code
     inline void RevertToDefaults();         //!< revert this setting to its default

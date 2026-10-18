@@ -186,10 +186,27 @@ AC_ARG_ENABLE(respawn,
 		[enable unsupported, hacky, impossible to deactivate at runtime, deathmatch mode. Use at your own risk. (default=disabled)]),,
 enable_respawn=no)
 
+AC_ARG_ENABLE(platform,
+	AC_HELP_STRING([--enable-platform],
+		[build the gPlatform layer: server events and platform login tokens, see platform-contract/README.md (needs libcurl, default=disabled)]),,
+enable_platform=no)
+AM_CONDITIONAL(ENABLE_PLATFORM, test x$enable_platform = xyes)
+
 AC_ARG_ENABLE(krawall,
 	AC_HELP_STRING([--enable-krawall],
 		[enable special visuals for the krawall gaming network (default=disabled)]),,
 enable_krawall=no)
+
+AC_ARG_ENABLE(webrtc,
+	AC_HELP_STRING([--enable-webrtc],
+		[enable the WebRTC DataChannel transport for browser clients (default=auto: on when libdatachannel is found)]),,
+enable_webrtc=auto)
+
+AC_ARG_WITH(libdatachannel,
+	AC_HELP_STRING([--with-libdatachannel=PREFIX],
+		[where libdatachannel lives, if pkg-config does not know it. Headers are
+		 taken from PREFIX/include, the library from PREFIX/lib or PREFIX/build]),,
+with_libdatachannel=)
 
 dnl start alias group
 AC_ENABLE(armathentication,
@@ -316,6 +333,26 @@ if test x$enable_armathentication = xyes; then
 AC_DEFINE(KRAWALL_SERVER,,enables krawall server)
 fi
 
+dnl The transport abstraction itself is always compiled; this flag only gates the
+dnl libdatachannel backed implementation in nTransportRtc.cpp (HAVE_WEBRTC and
+dnl BUILDWEBRTC are set after the libdatachannel checks below).
+dnl auto (the default): on when libdatachannel is there. A quick look
+dnl now, because the C++ standard below depends on it; the real checks decide, and
+dnl in auto mode a failure there only warns.
+webrtc_auto=no
+webrtc_missing=
+if test x$enable_webrtc = xauto; then
+  webrtc_auto=yes
+  if test x"$with_libdatachannel" = xno; then
+    enable_webrtc=no
+  elif test x"$with_libdatachannel" != x && test x"$with_libdatachannel" != xyes; then
+    if test -f "${with_libdatachannel}/include/rtc/rtc.hpp"; then enable_webrtc=yes; else enable_webrtc=no; fi
+  else
+    PKG_CHECK_EXISTS([libdatachannel], [enable_webrtc=yes], [enable_webrtc=no])
+  fi
+  test x$enable_webrtc = xno && webrtc_missing="libdatachannel was not found"
+fi
+
 dnl developer CXXFLAGS
 test -z "$DEBUGLEVEL" && DEBUGLEVEL=0
 test -z "$CODELEVEL" && CODELEVEL=0
@@ -342,6 +379,23 @@ if test -z "`echo $CXXFLAGS | grep "\-std="`"; then
 	  dnl last call: pre-c++11 standard. Works on mingw, so why not here?
 	  AX_CXXFLAGS_GCC_OPTION(-std=c++0x)
 	fi
+  fi
+fi
+
+dnl libdatachannel headers are C++17, so that choice is not ours to make. Drop
+dnl whatever standard was picked above and insist on it.
+if test x$enable_webrtc = xyes; then
+  webrtc_saved_CXXFLAGS="$CXXFLAGS"
+  CXXFLAGS="`echo $CXXFLAGS | sed -e 's,-std=[[^ ]]*,,g'`"
+  AX_CXXFLAGS_GCC_OPTION(-std=c++17)
+  if test -z "`echo $CXXFLAGS | grep '\-std=c++17'`"; then
+    if test x$webrtc_auto = xyes; then
+      CXXFLAGS="$webrtc_saved_CXXFLAGS"
+      enable_webrtc=no
+      webrtc_missing="the compiler does not accept -std=c++17 (libdatachannel is C++17)"
+    else
+      AC_MSG_ERROR([--enable-webrtc needs a compiler that accepts -std=c++17; libdatachannel is C++17.])
+    fi
   fi
 fi
 
@@ -619,6 +673,22 @@ dnl         libxml2
 dnl *************************************************
 
 if test x$armamain = xtrue; then
+
+dnl gPlatform layer: its own libcurl check, so it does not depend on --enable-curl
+if test x$enable_platform = xyes; then
+  PKG_CHECK_MODULES([PLATFORM_CURL], [libcurl >= 7], [
+    CPPFLAGS="$CPPFLAGS $PLATFORM_CURL_CFLAGS"
+    LIBS="$LIBS $PLATFORM_CURL_LIBS"
+    ], [AC_MSG_ERROR([--enable-platform needs libcurl (development files, found via pkg-config libcurl). Install it or configure without --enable-platform.])])
+  AC_DEFINE(ENABLE_PLATFORM, 1, [Define to build the gPlatform layer (--enable-platform)])
+  AC_DEFINE_UNQUOTED(PLATFORM_CONTRACT_DIR, "`cd $srcdir && pwd`/platform-contract", [platform contract and its test vectors])
+  dnl the platform worker is a std::thread
+  ACX_PTHREAD([
+  LIBS="${PTHREAD_LIBS} ${LIBS}"
+  CXXFLAGS="${CXXFLAGS} ${PTHREAD_CFLAGS}"
+  ], AC_MSG_ERROR([--enable-platform needs POSIX threads.]))
+fi
+
   PKG_CHECK_MODULES([XML2], [libxml-2.0 >= 2.6.11])
   CPPFLAGS="$CPPFLAGS $XML2_CFLAGS"
   LIBS="$LIBS $XML2_LIBS"
@@ -670,6 +740,84 @@ dnl ])
 
 fi # krawall
 fi # armamain
+
+dnl *************************************************
+dnl         WebRTC DataChannel transport
+dnl *************************************************
+
+dnl webrtc_fail <reason>: an error for --enable-webrtc, a warning (and no WebRTC) in auto mode
+webrtc_fail() {
+  if test x$webrtc_auto = xyes; then
+    webrtc_missing="$1"
+    enable_webrtc=no
+    CPPFLAGS="$webrtc_saved_CPPFLAGS"
+    LIBS="$webrtc_saved_LIBS"
+  else
+    AC_MSG_ERROR([--enable-webrtc: $1])
+  fi
+}
+webrtc_saved_CPPFLAGS="$CPPFLAGS"
+webrtc_saved_LIBS="$LIBS"
+
+if test x$enable_webrtc = xyes; then
+dnl libdatachannel spawns its own threads and the transport queue is guarded by a
+dnl std::mutex, so pthread is not optional here, whatever the other options say.
+if test -z "$PTHREAD_CFLAGS" && test -z "$PTHREAD_LIBS"; then
+ACX_PTHREAD([
+LIBS="${PTHREAD_LIBS} ${LIBS}"
+CXXFLAGS="${CXXFLAGS} ${PTHREAD_CFLAGS}"
+CC="${PTHREAD_CC}"
+AC_DEFINE(HAVE_PTHREAD,1,[Define if you have POSIX threads libraries and header files.])
+],
+webrtc_fail "it needs POSIX threads."
+)
+fi
+fi
+
+if test x$enable_webrtc = xyes; then
+dnl an explicit prefix wins; its cmake build installs no pkg-config file
+if test x"$with_libdatachannel" != x && test x"$with_libdatachannel" != xyes; then
+  dnl -isystem, not -I: third party headers must not trip our own -Werror
+  LIBDATACHANNEL_CFLAGS="-isystem ${with_libdatachannel}/include"
+  LIBDATACHANNEL_LIBS="-L${with_libdatachannel}/lib -L${with_libdatachannel}/build -ldatachannel"
+  LIBDATACHANNEL_LIBS="${LIBDATACHANNEL_LIBS} -Wl,-rpath,${with_libdatachannel}/lib -Wl,-rpath,${with_libdatachannel}/build"
+else
+  PKG_CHECK_MODULES([LIBDATACHANNEL], [libdatachannel],, [
+    webrtc_fail "it needs libdatachannel. Install it, or point at it with --with-libdatachannel=PREFIX."
+  ])
+fi
+fi
+
+dnl this line still runs its checks in C at this point; the headers are C++17
+dnl (pushed and popped unconditionally, so the language stack stays balanced)
+AC_LANG_PUSH([C++])
+
+if test x$enable_webrtc = xyes; then
+CPPFLAGS="${CPPFLAGS} ${LIBDATACHANNEL_CFLAGS}"
+LIBS="${LIBS} ${LIBDATACHANNEL_LIBS}"
+
+AC_CHECK_HEADER([rtc/rtc.hpp],,[
+  webrtc_fail "rtc/rtc.hpp not found. Check --with-libdatachannel=PREFIX."
+])
+fi
+
+if test x$enable_webrtc = xyes; then
+AC_MSG_CHECKING([whether libdatachannel links])
+AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <rtc/rtc.hpp>]],
+                                [[rtc::InitLogger(rtc::LogLevel::Error);]])],
+  [AC_MSG_RESULT([yes])
+   AC_DEFINE(HAVE_LIBDATACHANNEL,1,[Define if libdatachannel is available])],
+  [AC_MSG_RESULT([no])
+   webrtc_fail "libdatachannel found but not usable. See config.log."])
+fi
+
+dnl the checks above ran in C++ (libdatachannel headers are C++17)
+AC_LANG_POP([C++])
+
+if test x$enable_webrtc = xyes; then
+AC_DEFINE(HAVE_WEBRTC,,[Define to enable the WebRTC DataChannel transport])
+fi
+AM_CONDITIONAL(BUILDWEBRTC, test x$enable_webrtc = xyes)
 
 dnl *************************************************
 dnl         math
@@ -1103,6 +1251,8 @@ else
 fi
 echo "     Allow multiple versions: $enable_multiver$multiver_info"
 echo "     Use custom memory manager: $enable_memmanager"
+echo "     Build the gPlatform layer: $enable_platform"
+echo "     Browser clients (WebRTC): $enable_webrtc"
 echo "     Debug level : $DEBUGLEVEL"
 echo "     Code level  : $CODELEVEL"
 echo "     CPPFLAGS    : $CPPFLAGS"
@@ -1124,5 +1274,14 @@ if test "x$OUTSIDE_OF_PREFIX" = "xyes"; then
     echo "  after consulting \"configure --help\" for the effects; if you want to get rid"
     echo "  of this warning, pass the corresponding opposite switches."
     echo ""
+fi
+
+# browser support is on by default; say so loudly when it could not be
+if test "x$webrtc_missing" != "x"; then
+    AC_MSG_WARN([
+  Building WITHOUT browser support (WebRTC): $webrtc_missing.
+  Browser players will not be able to join servers built from this.
+  Install libdatachannel (https://github.com/paullouisageneau/libdatachannel)
+  or point at it with --with-libdatachannel=PREFIX; --disable-webrtc silences this.])
 fi
 

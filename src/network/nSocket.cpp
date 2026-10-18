@@ -35,6 +35,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "tRandom.h"
 #include "tSysTime.h"
 #include "tRandom.h"
+#include "nTransport.h"
 
 #include <string>
 #include <stdio.h>
@@ -1211,6 +1212,10 @@ const nAddress & nAddress::GetHostname( tString & hostname ) const
     hostname.Clear();
     hostname << ((haddr >> 24) & 0xff) << "." << ((haddr >> 16) & 0xff) << "." << ((haddr >> 8) & 0xff) << "." << (haddr & 0xff);
 
+    // virtual peers are not in the DNS; never ask for them
+    if ( IsVirtual() )
+        return *this;
+
     // read hostname from recording
     static char const * section = "HOSTBYADDR";
     if ( !tRecorder::PlaybackStrict( section, hostname ) )
@@ -1430,6 +1435,76 @@ bool nAddress::IsSet () const
 
 // *******************************************************************************************
 // *
+// *	IsVirtual
+// *
+// *******************************************************************************************
+//!
+//!		@return		    true if this peer is reached through an nTransport, not a socket
+//!
+// *******************************************************************************************
+
+bool nAddress::IsVirtual () const
+{
+    return addr_.addr.sa_family == AF_ARMA_VIRTUAL;
+}
+
+// *******************************************************************************************
+// *
+// *	GetConnectionId
+// *
+// *******************************************************************************************
+//!
+//!		@return		    the transport connection ID stored in the port field
+//!
+// *******************************************************************************************
+
+unsigned short nAddress::GetConnectionId () const
+{
+    return ntohs( addr_.addr_in.sin_port );
+}
+
+// *******************************************************************************************
+// *
+// *	GetIPv4
+// *
+// *******************************************************************************************
+//!
+//!		@return		    the raw IPv4 address in network byte order
+//!
+// *******************************************************************************************
+
+unsigned int nAddress::GetIPv4 () const
+{
+    return addr_.addr_in.sin_addr.s_addr;
+}
+
+// *******************************************************************************************
+// *
+// *	Virtual
+// *
+// *******************************************************************************************
+//!
+//!		@param	ipv4NetworkOrder    the peer's real IPv4 address in network byte order
+//!		@param	connectionId        the transport connection ID
+//!		@return		                the virtual address
+//!
+// *******************************************************************************************
+
+nAddress nAddress::Virtual( unsigned int ipv4NetworkOrder, unsigned short connectionId )
+{
+    nAddress ret;
+
+    // the family is checked first by Compare, so a virtual peer never matches a UDP peer
+    ret.addr_.addr   .sa_family   = AF_ARMA_VIRTUAL;
+    ret.addr_.addr_in.sin_addr.s_addr = ipv4NetworkOrder;
+    ret.addr_.addr_in.sin_port    = htons( connectionId );
+    ret.addrLen_ = sizeof( sockaddr_in );
+
+    return ret;
+}
+
+// *******************************************************************************************
+// *
 // *	Compare
 // *
 // *******************************************************************************************
@@ -1452,6 +1527,43 @@ int nAddress::Compare( const nAddress & a1, const nAddress & a2 )
         return 1;
 
     return 0;
+}
+
+// *******************************************************************************************
+// *
+// *	SameHost
+// *
+// *******************************************************************************************
+//!
+//!		@param	a1  first address to compare
+//!		@param	a2  second address to compare
+//!		@return true if both addresses carry the same IPv4 host
+//!
+//! Compare() distinguishes families, so a browser peer (AF_ARMA_VIRTUAL) and a UDP peer
+//! from one IP never match. Per-IP limits have to see them as one host.
+// *******************************************************************************************
+
+bool nAddress::SameHost( const nAddress & a1, const nAddress & a2 )
+{
+    if ( !a1.CarriesIPv4() || !a2.CarriesIPv4() )
+        return false;
+
+    return a1.addr_.addr_in.sin_addr.s_addr == a2.addr_.addr_in.sin_addr.s_addr;
+}
+
+// *******************************************************************************************
+// *
+// *	CarriesIPv4
+// *
+// *******************************************************************************************
+//!
+//!		@return		    true if sin_addr holds a meaningful IPv4 address
+//!
+// *******************************************************************************************
+
+bool nAddress::CarriesIPv4 () const
+{
+    return addr_.addr.sa_family == AF_INET || addr_.addr.sa_family == AF_ARMA_VIRTUAL;
 }
 
 // *******************************************************************************************
@@ -2678,12 +2790,26 @@ bool nBasicNetworkSystem::Select( REAL dt )
                 // con << ", " << (*iter).GetSocket();
             }
 
+            // watch the registered transport, if it has something to watch
+            nTransport * transport = nTransport::Instance();
+            int wakeFd = transport ? transport->WakeFd() : -1;
+            if ( wakeFd >= 0 )
+            {
+                FD_SET( wakeFd, &rfds );
+                if ( wakeFd > max )
+                    max = wakeFd;
+            }
+
             // set time
             tv.tv_sec  = static_cast< long int >( dt );
             tv.tv_usec = static_cast< long int >( (dt-tv.tv_sec)*1000000 );
 
             // delegate to system select
             retval = select(max+1, &rfds, NULL, NULL, &tv);
+
+            // consume the wakeup so the next select blocks again
+            if ( wakeFd >= 0 && retval > 0 && FD_ISSET( wakeFd, &rfds ) )
+                transport->DrainWakeFd();
         }
 
     }

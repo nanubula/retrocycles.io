@@ -53,7 +53,7 @@ libtools_a_SOURCES=	${tools_extra} tools/tArray.cpp tools/tArray.h tools/tCallba
 	tools/tList.h tools/tLocale.cpp tools/tLocale.h tools/tMath.h \
 	tools/tMemStack.cpp tools/tMemStack.h tools/tReferenceHolder.h \
     tools/tRing.cpp tools/tRing.h tools/tSafePTR.cpp\
-	tools/tSafePTR.h tools/tString.cpp tools/tString.h tools/tSysTime.cpp tools/tSysTime.h tools/tToDo.cpp tools/tToDo.h\
+	tools/tSafePTR.h tools/tString.cpp tools/tString.h tools/tUtf8.h tools/tSysTime.cpp tools/tSysTime.h tools/tToDo.cpp tools/tToDo.h\
 	tools/tException.cpp tools/tException.h\
 	tools/tRecorder.cpp tools/tRecorder.h\
 	tools/tRecorderInternal.cpp tools/tRecorderInternal.h\
@@ -70,7 +70,16 @@ libnetwork_a_SOURCES=network/md5.cpp network/md5.h network/nAuthentication.cpp\
 	network/nNetObject.cpp network/nNetObject.h network/nNetwork.cpp network/nNetwork.h\
 	network/nObserver.cpp network/nObserver.h network/nPriorizing.cpp network/nPriorizing.h\
 	network/nServerInfo.cpp network/nServerInfo.h network/nSimulatePing.h network/nSocket.cpp\
-	network/nSocket.h network/nSpamProtection.cpp network/nSpamProtection.h
+	network/nSocket.h network/nSpamProtection.cpp network/nSpamProtection.h\
+	network/nTransport.cpp network/nTransport.h\
+	network/nTransportLoopback.cpp network/nTransportLoopback.h\
+	network/nTransportRtc.h network/nTransportRtcSupport.h
+
+# the WebRTC transport needs libdatachannel; its header is listed above regardless
+# so that "make dist" ships it from a build that does not compile it
+if BUILDWEBRTC
+libnetwork_a_SOURCES+=network/nTransportRtc.cpp
+endif
 
 if BUILDMAIN
 libenginecore_a_SOURCES=engine/eGameObject.cpp engine/eGameObject.h \
@@ -186,3 +195,26 @@ endif
 ## armagetronad is a C++ project.
 
 ## Note 2: Libraries must be listed in reverse dependency order.
+
+# The gPlatform layer (platform-contract/README.md, engine/ePlatform.h). The seam and the game
+# hooks are always built; the HTTP implementation and its third party code only with
+# --enable-platform. Kept in one block down here so that edits above never collide with it.
+if BUILDMAIN
+libengine_a_SOURCES+=engine/ePlatform.cpp engine/ePlatform.h
+libtron_a_SOURCES+=tron/gPlatformEvents.cpp tron/gPlatformEvents.h
+if ENABLE_PLATFORM
+# -isystem: third party headers must not trip our -Werror
+platform_includes=-isystem @srcdir@/thirdparty -isystem @srcdir@/thirdparty/monocypher -isystem @srcdir@/thirdparty/monocypher/optional
+libtron_a_SOURCES+=tron/gPlatformHttp.cpp tron/gPlatformHttp.h tron/gPlatformToken.cpp tron/gPlatformToken.h\
+	tron/gPlatformModeration.cpp tron/gPlatformModeration.h tron/gPlatformMoves.cpp tron/gPlatformMoves.h\
+	tron/gPlatformRematch.cpp tron/gPlatformRematch.h\
+	tron/gPlatformLink.cpp tron/gPlatformLink.h tron/gPlatformSocial.cpp tron/gPlatformSocial.h\
+	thirdparty/monocypher/monocypher.c thirdparty/monocypher/monocypher.h\
+	thirdparty/monocypher/optional/monocypher-ed25519.c thirdparty/monocypher/optional/monocypher-ed25519.h\
+	thirdparty/nlohmann/json.hpp
+libtron_a_CXXFLAGS+=$(platform_includes)
+libtron_a_CFLAGS=$(AM_CFLAGS) $(platform_includes)
+endif
+endif
+
+EXTRA_DIST+=thirdparty/monocypher/LICENCE.md thirdparty/monocypher/README thirdparty/nlohmann/LICENSE.MIT thirdparty/nlohmann/README

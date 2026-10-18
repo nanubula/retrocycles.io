@@ -34,11 +34,14 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "tConsole.h"
 #include "tDirectories.h"
 #include "nSocket.h"
+#include "nTransport.h"
+#include "nTransportRtc.h"
 #include "nConfig.h"
 #include "nKrawall.h"
 #include "tSysTime.h"
 #include "tRecorder.h"
 #include "tRandom.h"
+#include "tUtf8.h"
 #include <stdlib.h>
 #include <fstream>
 #include "tMath.h"
@@ -1273,6 +1276,27 @@ nMessage& nMessage::operator >> (tColoredString &s )
     return *this;
 }
 
+// a chat line from a client that writes UTF-8 (a browser client): what operator >>
+// does, except that the server's filter keeps well formed UTF-8 sequences whole. NetFilter
+// would turn the bytes 0x80-0x9f into '_', which are half of UTF-8's continuation bytes.
+nMessage& nMessage::ReadUtf8( tColoredString &s )
+{
+    ReadRaw( s );
+
+    if ( sn_GetNetState() == nSERVER )
+    {
+        s = tColoredString( tUtf8NetFilter( static_cast< char const * >( s ) ).c_str() );
+        s.RemoveTrailingColor();
+    }
+
+    if ( sn_filterColorStrings )
+        s = tColoredString::RemoveColors( s, false );
+    else if ( sn_filterDarkColorStrings )
+        s = tColoredString::RemoveColors( s, true );
+
+    return *this;
+}
+
 nMessage& nMessage::operator >> (tString &s )
 {
     tColoredString safe;
@@ -1762,7 +1786,9 @@ int CountSameIP( int user, bool reset=false )
             if(!sn_Connections[user2].socket)
                 continue;
 
-            if ( user2 != user && nAddress::Compare( peers[user], peers[user2] ) >=0 )
+            // per-IP limits count browser peers (virtual family) and UDP peers from one
+            // host together; Compare() would separate them by address family.
+            if ( user2 != user && nAddress::SameHost( peers[user], peers[user2] ) )
             {
                 count++;
             }
@@ -2276,8 +2302,13 @@ void nSendBuffer::Send			( nSocket const &				socket
         // store our id
         sendBuffer_[sendBuffer_.Len()]=htons(::sn_myNetID);
 
-        socket.Write( reinterpret_cast<int8 *>(&(sendBuffer_[0])),
-                      2*sendBuffer_.Len(), peer);
+        // virtual peers have no socket; they are reached through the registered transport
+        if ( peer.IsVirtual() )
+            nTransport::TrySendPacket( peer, reinterpret_cast<int8 *>(&(sendBuffer_[0])),
+                                       2*sendBuffer_.Len() );
+        else
+            socket.Write( reinterpret_cast<int8 *>(&(sendBuffer_[0])),
+                          2*sendBuffer_.Len(), peer);
 
         if ( control )
         {
@@ -2547,7 +2578,40 @@ typedef std::deque< tJUST_CONTROLLED_PTR< nMessage > > nMessageFifo;
 // from nServerInfo.cpp
 extern nDescriptor RequestSmallServerInfoDescriptor, RequestBigServerInfoDescriptor;
 
-static void rec_peer(unsigned int peer){
+//! packet sources rec_peer drains
+enum nDrainSource
+{
+    nDrain_All,            //!< the peer's socket first, the registered transport afterwards
+    nDrain_TransportOnly   //!< only the registered transport
+};
+
+/* Transport packets one rec_peer call reads at most. Producer threads can fill the
+   transport's queue as fast as the game thread empties it, so draining until it is
+   empty could keep the game loop here forever; what is left waits for the next call.
+   A fixed number, so a recording plays back with the same reads. */
+static int const sn_transportReadsPerDrain = 1024;
+
+//! reads one packet, from the socket while it has data and from the transport afterwards;
+//! transportBudget counts the transport reads that are still allowed
+static int rec_packet( unsigned int peer, unsigned short * buff, int maxrec, nAddress & addrFrom, bool & socketDry, int & transportBudget )
+{
+    if ( !socketDry )
+    {
+        int len = sn_Connections[peer].socket->Read( reinterpret_cast<int8 *>(buff), maxrec*2, addrFrom );
+        if ( len >= 0 )
+            return len;
+
+        socketDry = true;
+    }
+
+    if ( transportBudget <= 0 )
+        return -1;
+    --transportBudget;
+
+    return nTransport::ReadPacket( reinterpret_cast<int8 *>(buff), maxrec*2, addrFrom );
+}
+
+static void rec_peer(unsigned int peer, nDrainSource source = nDrain_All){
     tASSERT( sn_Connections[peer].socket );
 
     sn_turtleMode.Update();
@@ -2569,10 +2633,12 @@ static void rec_peer(unsigned int peer){
     if (sn_Connections[peer].socket){
         int count=0;
         int len=1;
+        bool socketDry = ( nDrain_TransportOnly == source );
+        int transportBudget = sn_transportReadsPerDrain;
         while (len>=0 && sn_Connections[peer].socket)
         {
             nAddress addrFrom; // the sender of the current packet
-            len = sn_Connections[peer].socket->Read( reinterpret_cast<int8 *>(buff),maxrec*2, addrFrom);
+            len = rec_packet( peer, buff, maxrec, addrFrom, socketDry, transportBudget );
 
             if (len>=2){
                 if ( len >= maxrec*2 )
@@ -3065,6 +3131,17 @@ void sn_SetNetState(nNetState x){
             if ( !tRecorder::IsPlayingBack() )
                 sn_SaveMachines();
 
+#ifdef HAVE_LIBDATACHANNEL
+        // browser clients are only served while we are a server. The transport
+        // lives as long as the sockets do: nSocketResetInhibitor (the master
+        // announce flips nSERVER -> nCLIENT -> nSTANDALONE per master) keeps
+        // the signalling listener and the open data channels up, the way it
+        // keeps the UDP sockets; logins that arrive meanwhile are ignored by
+        // login_handler like those of UDP clients, and the client resends.
+        if ( current_state == nSERVER && x != nSERVER && !sn_noReset )
+            nTransportRtc::StopServer();
+#endif
+
         reentry=true;
         if (x!=nSTANDALONE)
         {
@@ -3091,6 +3168,11 @@ void sn_SetNetState(nNetState x){
 #ifdef DEDICATED
                 // save host port that worked, otherwise it may change from the port sent to the master server
                 sn_serverPort = net_hostport;
+#endif
+
+#ifdef HAVE_LIBDATACHANNEL
+                // no-op unless WEBRTC_ENABLE is set; UDP only servers stay untouched
+                nTransportRtc::TryStartServer();
 #endif
             }
         }
@@ -3129,7 +3211,13 @@ void sn_SetNetState(nNetState x){
 
             // shutdown network system to get new socket
             if ( !sn_noReset )
+            {
+#ifdef HAVE_LIBDATACHANNEL
+                // the transport goes with the sockets (no-op if already stopped)
+                nTransportRtc::StopServer();
+#endif
                 sn_BasicNetworkSystem.Shutdown();
+            }
         }
 
         current_state=x;
@@ -3730,6 +3818,22 @@ void sn_Receive(){
                     sn_Connections[MAXCLIENTS+1].socket = NULL;
                 }
             }
+
+            // Virtual peers have no listening socket of their own, and the loop above is
+            // only entered when a UDP socket has data, so drain the transport separately.
+            // The first listener serves as the non-NULL sentinel socket rec_peer and
+            // nAuthentication.cpp assert on; writes to a virtual peer never reach it,
+            // nSendBuffer::Send dispatches on the address family first.
+            // While recording or playing back, CheckNewConnection() hands out the socket
+            // unconditionally, so the loop above already drained the transport; a second
+            // drain here would archive "TREAD" blocks playback never consumes.
+            if ( nTransport::Instance() && !tRecorder::IsRunning() && listener.begin() != listener.end() )
+            {
+                peers[MAXCLIENTS+1] = nAddress{};
+                sn_Connections[MAXCLIENTS+1].socket = &( *listener.begin() );
+                rec_peer(MAXCLIENTS+1, nDrain_TransportOnly);
+                sn_Connections[MAXCLIENTS+1].socket = NULL;
+            }
         }
         // z-man: after much thought, the server does also need to listen to the
         // network control socket. .... Thinking again, it's only important for the master
@@ -4059,6 +4163,46 @@ void sn_GetAdr(int user,  tString& name)
 unsigned int sn_GetPort(int user)
 {
     return peers[user].GetPort();
+}
+
+bool sn_IsVirtualPeer(int user)
+{
+    return peers[user].IsVirtual();
+}
+
+std::string sn_PeerTicket(int user)
+{
+    if (user <= 0 || user > MAXCLIENTS || !peers[user].IsVirtual())
+        return std::string();
+    return nTransport::TicketOf(peers[user]);
+}
+
+void sn_DisconnectPeer(nAddress const & peer, const tOutput& reason)
+{
+    if ( sn_GetNetState() != nSERVER )
+        return;
+
+    for ( int user = 1; user <= MAXCLIENTS; ++user )
+    {
+        if ( sn_Connections[user].socket && nAddress::Compare( peers[user], peer ) == 0 )
+        {
+            sn_DisconnectUser( user, reason );
+        }
+    }
+}
+
+bool sn_IsPeerConnected(nAddress const & peer)
+{
+    if ( sn_GetNetState() != nSERVER )
+        return false;
+
+    for ( int user = 1; user <= MAXCLIENTS; ++user )
+    {
+        if ( sn_Connections[user].socket && nAddress::Compare( peers[user], peer ) == 0 )
+            return true;
+    }
+
+    return false;
 }
 
 unsigned int sn_GetServerPort()
