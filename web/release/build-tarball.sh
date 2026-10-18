@@ -9,7 +9,7 @@
 # Environment (all optional):
 #   RELEASE_TAG  v<major_version>.<N>, e.g. v0.2.9-sty+ct+ap+io.1: the version of a release
 #                build (batch/make/version). Unset: a dev build with a dev version.
-#   IMAGE        build image, default ubuntu:22.04
+#   BUILD_IMAGE  build image, default ubuntu:22.04
 #   JOBS         make -j, default the container's nproc
 #
 # The sources are `git archive` of GIT_REF (default: HEAD plus uncommitted changes to tracked
@@ -136,7 +136,7 @@ OUT_HOST="$OUT"
 if command -v cygpath >/dev/null 2>&1; then OUT_HOST="$(cygpath -w "$OUT")"; fi
 
 cid="$(docker create -e RELEASE_TAG="${RELEASE_TAG:-}" -e JOBS="${JOBS:-}" \
-    "${IMAGE:-ubuntu:22.04}" bash /src/web/release/build-tarball.sh --in-container)"
+    "${BUILD_IMAGE:-ubuntu:22.04}" bash /src/web/release/build-tarball.sh --in-container)"
 trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
 git -c core.autocrlf=false archive --format=tar --prefix=src/ "$REF" | docker cp - "$cid:/"
 docker start -a "$cid"
