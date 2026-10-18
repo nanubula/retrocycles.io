@@ -58,6 +58,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "nServerInfo.h"
 #include "nSocket.h"
+#include "gPlatformEvents.h"
 
 #ifndef DEDICATED
 #include "rRender.h"
@@ -926,6 +927,7 @@ int main(int argc,char **argv){
             while (!uMenu::quickexit)
                 sg_HostGame();
 #endif
+            gPlatformEvents::Shutdown();
             nNetObject::ClearAll();
             nServerInfo::DeleteAll();
         }

@@ -46,6 +46,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include <set>
 #include <list>
+#include <deque>
 #include <utility>
 #include "eChat.h"
 
@@ -221,6 +222,7 @@ private:
 class ePlayerNetID: public nNetObject, public eAccessLevelHolder{
     friend class ePlayer;
     friend class eTeam;
+    friend class eNameMessenger;
     friend class eNetGameObject;
     friend class tControlledPTR< ePlayerNetID >;
     // access level. lower numeric values are better.
@@ -506,6 +508,15 @@ private:
     tColoredString  nameFromClient_;        //!< this player's name as the client wants it to be. Avoid using it when possilbe.
     tColoredString  nameFromServer_;        //!< this player's name as the server wants it to be. Avoid using it when possilbe.
     tColoredString  nameFromAdmin_;         //!< this player's name as the admin wants it to be. Avoid using it when possilbe.
+    tColoredString  nameRequested_;         //!< server: the last name the client sent, so a request is acted on once
+    tString         nameRefused_;           //!< server: the last name refused as not allowed (the player is told once)
+    std::deque<double> nameChangeTimes_;    //!< server: when the recent at-once name changes happened
+    bool            nameChangeDeferred_ = false; //!< server: the player was told the change waits for the next round
+    bool            quietRename_ = false;   //!< server: the next name change is a moderation rename (old name not announced)
+    bool            moderationLock_ = false; //!< server: the name was locked by a moderation rename (refused names not repeated)
+
+    void RequestNameChange();               //!< server: the client asked for another name; applied at once unless limited
+    bool CheckNameAllowed();                //!< server: replaces a client name the platform's word lists refuse; false if it did
     tColoredString  coloredName_;           //!< this player's name, cleared by the server. Use this for onscreen screen display.
     tString         name_;                  //!< this player's name without colors.
     tString         userName_;              //!< this player's name, cleared for system logs. Use for writing to files or comparing with admin input.
@@ -557,6 +568,7 @@ public:
     ePlayerNetID & SetName( char    const * name ); //!< Sets this player's name. Sets processed names (colored, username, nameFromCLient) as well.
     ePlayerNetID & SetName( tString const & name , bool force ); //!< Sets this player's name. Sets processed names (colored, username, nameFromCLient) as well.
     ePlayerNetID & ForceName( tString const & name ); //!< Forces this player's name. Forces processed names (colored, username, nameFromCLient) as well.
+    void ModerationRename( tString const & name );    //!< Renames the player at once for an offensive name: the old name is not repeated, the name stays locked.
 
     inline ePlayerNetID & SetUserName( tString const & userName );  //!< Sets this player's name, cleared for system logs. Use for writing to files or comparing with admin input. The other names stay unaffected.
 
@@ -573,6 +585,7 @@ void se_ChatState( ePlayerNetID::ChatFlags flag, bool cs);
 void se_SaveToScoreFile( tOutput const & out );  //!< writes something to scorelog.txt
 void se_SaveToChatLog( tOutput const & out );  //!< writes something to chatlog.txt (if enabled) and/or ladderlog
 void se_SaveToLadderLog( tOutput const & out );  //!< writes something to ladderlog.txt
+tString se_ServerMode();  //!< SERVER_MODE: the kind of game the server runs, one trimmed line (empty: not set)
 void se_SaveToChatLogC( tOutput const &out ); //!< writes something to chatlog_color.txt
 
 //! create a global instance of this to write stuff to ladderlog.txt

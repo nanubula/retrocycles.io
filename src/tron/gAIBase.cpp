@@ -181,6 +181,11 @@ nDescriptor &gAITeam::CreatorDescriptor() const
     return gAITeam_init;
 }
 
+// the IQ that team balancing (TEAM_BALANCE_WITH_AIS, TEAMS_MIN) picks its AI players by: it
+// adds the characters closest to it and removes the farthest first (default: the smartest)
+static int sg_teamBalanceIQ = 1000;
+static tSettingItem<int> sg_teamBalanceIQConf("AI_TEAM_BALANCE_IQ", sg_teamBalanceIQ);
+
 // fill empty team positions with AI players
 void gAITeam::BalanceWithAIs(bool balanceWithAIs)
 {
@@ -239,7 +244,7 @@ void gAITeam::BalanceWithAIs(bool balanceWithAIs)
                 for ( j=t->NumPlayers()-1; j>=0; --j )
                 {
                     gAIPlayer* player = dynamic_cast<gAIPlayer*>( t->Player( j ) );
-                    if ( player && !player->IsHuman() && ( !throwOut || !throwOut->Character() || !player->Character() || throwOut->Character()->iq > player->Character()->iq ) )
+                    if ( player && !player->IsHuman() && ( !throwOut || !throwOut->Character() || !player->Character() || fabs( throwOut->Character()->iq - sg_teamBalanceIQ ) < fabs( player->Character()->iq - sg_teamBalanceIQ ) ) )
                     {
                         throwOut = player;
                     }
@@ -265,8 +270,8 @@ void gAITeam::BalanceWithAIs(bool balanceWithAIs)
 
             while ( AIs < wishAIs )
             {
-                // add the smartest AI player you can get
-                gAICharacter* best = BestIQ( 1000 );
+                // add the AI player closest to AI_TEAM_BALANCE_IQ you can get
+                gAICharacter* best = BestIQ( sg_teamBalanceIQ );
 
                 if ( best )
                 {

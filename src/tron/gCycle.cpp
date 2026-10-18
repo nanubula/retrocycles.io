@@ -49,6 +49,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "nKrawall.h"
 #include "gAIBase.h"
 #include "eDebugLine.h"
+#include "gPlatformEvents.h"
 #include "eLagCompensation.h"
 #include "gArena.h"
 #include "gSpawn.h"
@@ -3463,6 +3464,7 @@ void gCycle::KillAt( const eCoord& deathPos){
     // set position to death position so the explosion is at the right place (I dimly remember this caused problems in an earlier attempt)
     this->pos = deathPos;
 
+    gPlatformEvents::DeathCredited( this, hunter );
     Kill();
 }
 
@@ -4335,6 +4337,7 @@ void gCycle::Kill(){
             }
 
             Die( lastTime );
+            gPlatformEvents::CycleDied( this );
             tNEW(gExplosion)(grid, pos,lastTime, color_, this );
             //	 eEdge::SeethroughHasChanged();
 

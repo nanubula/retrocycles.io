@@ -2682,6 +2682,7 @@ gamestate_minute_warn        One minute left!\n
 gamestate_2minutes_warn        Two minutes left!\n
 gamestate_5minutes_warn        Five minutes left!\n
 gamestate_10minutes_warn    Ten minutes left!\n
+gamestate_sudden_death      Tied at the time limit: the next point wins!\n
 
 gamestate_set_start_center    New Set
 gamestate_set_start_console    Starting Set \1!\n
@@ -2768,6 +2769,14 @@ player_allowed_teamchange \10x77ff77 has been allowed to change their team.\n
 player_disallowed_teamchange     \10xff7777 cannot change teams anymore.\n
 vote_spam_protection             VOTE SPAM PROTECTION: you are disallowed from issuing votes for the next \1 seconds.\n
 chat_title_text                     Say:
+# a chat message in a script the game's Latin-1 cannot show, as desktop clients get it;
+# the run forms replace a stretch of it inside a longer line (/me)
+chat_message_in_korean      [message in Korean]
+chat_message_in_japanese    [message in Japanese]
+chat_message_in_chinese     [message in Chinese]
+chat_run_korean             [Korean]
+chat_run_japanese           [Japanese]
+chat_run_chinese            [Chinese]
 player_entered_game                 \1 0x7fff7fentered the game.\n
 player_entered_spectator         \1 0x7fff7fentered as spectator.\n
 player_left_spectator            0xff7f7fSpectator \1 0xff7f7fleft.\n
@@ -2777,6 +2786,9 @@ player_renamed                     \2 renamed to \1.\n
 player_renamed_teamname          \2 changed teamname to \1.\n
 player_got_renamed                 \2 has been renamed to \1.\n
 player_will_be_renamed             \2 will be renamed to \1.\n
+player_renamed_moderation          A player was renamed to \1.\n
+player_name_not_allowed            That name is not allowed here, so you play as \1.\n
+player_rename_next_round           You changed your name too often lately: your new name takes effect next round.\n
 player_rename_rejected_votekick  \1 0xffffffis not allowed to rename to \2 0xffffffright now to avoid confusion with kick votes.\n
 player_rename_rejected_admin     \1 0xffffffis not allowed to rename to \20xffffff, as its name was locked by the administrator.\n
 player_allowed_rename             \1 0x7fff7fis allowed to rename again.\n
@@ -3048,6 +3060,7 @@ network_kill_cheater        It assumed you are cheating. If that is untrue, it i
 network_kill_error            An error occurred while processing messages from your client. This usually indicates a client or server bug.
 network_kill_servercomplete    Server list transfer complete.
 network_kill_timeout        You timed out.
+network_kill_transport_closed The connection was closed.
 network_kill_logout            You logged out regularly.
 network_kill_incompatible    You are running a version incompatible with the server.
 network_kill_full            The server is full.
@@ -3339,6 +3352,7 @@ password_help            Password setting
 login_request_redundant        Already logged in.\n
 login_request_failed        Login failed. Try again!
 login_request_failed_dup    Two logins with the same account are not permitted.\n
+login_replaced_elsewhere    Your account logged in again from another place.
 login_not_supported         This server does not support authentication of the type you requested, sorry.\n
 login_request               Login with Authority \1
 login_request_local         Login with Local Account

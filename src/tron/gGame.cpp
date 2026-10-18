@@ -77,6 +77,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "gParser.h"
 #include "tResourceManager.h"
 #include "nAuthentication.h"
+#include "gPlatformEvents.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -2215,6 +2216,7 @@ void sg_HostGame(){
     }
 
     sn_SetNetState(nSERVER);
+    gPlatformEvents::ServerStarted();
 
     update_settings();
     ePlayerNetID::CompleteRebuild();
@@ -2227,6 +2229,7 @@ void sg_HostGame(){
 
     if ( sg_NumUsers() == 0)
     {
+        gPlatformEvents::RoomEmpty();
         cp();
         con << tOutput("$online_activity_napping") << "\n";
         sg_Timestamp();
@@ -2349,6 +2352,7 @@ void sg_Receive()
         // to close the socket altogether, but that opens another can of worms.
         sn_DiscardFromControlSocket();
     }
+    ePlatform::Drain();
 }
 
 static void sg_StopQuickExit()
@@ -4172,7 +4176,57 @@ void gGame::StateUpdate(){
 }
 
 static float sg_respawnTime = -1;
-static tSettingItem<float> sg_respawnTimeConfig( "RESPAWN_TIME", sg_respawnTime );
+
+// a network setting that goes to the browser clients alone, because a 0.2.9 client knows no
+// network setting of that name and would complain about it: RESPAWN_TIME (they count a dead
+// player's respawn down on the screen), RESPAWN_JOIN_READY (below)
+class gBrowserClientSetting: public nSettingItem<float>
+{
+public:
+    gBrowserClientSetting( char const * name, float & value ): tConfItemBase( name ), nSettingItem<float>( name, value ){}
+
+    void SendConfig( bool force, int peer ) override
+    {
+        if ( peer >= 0 )
+        {
+            if ( sn_IsVirtualPeer( peer ) )
+                nConfItemBase::SendConfig( force, peer );
+            return;
+        }
+
+        for ( int user = 1; user <= MAXCLIENTS; ++user )
+            if ( sn_Connections[user].socket && sn_IsVirtualPeer( user ) )
+                nConfItemBase::SendConfig( force, user );
+        changed = false;
+    }
+};
+static gBrowserClientSetting sg_respawnTimeConfig( "RESPAWN_TIME", sg_respawnTime );
+
+// a respawn match (RESPAWN_MATCH 1, freestyle with RESPAWN_TIME on): nobody is out for good,
+// so the round lasts until the match's score or time limit (or a vote) ends it. Analysis()
+// counts a player waiting to respawn as still in the round, opens no win zone, and does not
+// restart the match when a second human arrives.
+static bool sg_respawnMatch = false;
+static tSettingItem<bool> sg_respawnMatchConf( "RESPAWN_MATCH", sg_respawnMatch );
+
+static bool sg_RespawnMatch()
+{
+    return sg_respawnMatch && sg_respawnTime >= 0 && sg_currentSettings->gameType == gFREESTYLE;
+}
+
+// a player of a respawn match whose cycle is dead (or not spawned yet) and who will get a new one
+static bool sg_WaitingToRespawn( ePlayerNetID const * p )
+{
+    if ( !sg_RespawnMatch() || !p->CanRespawn() )
+        return false;
+    eGameObject const * e = p->Object();
+    return !e || !e->Alive();
+}
+
+// seconds a match tied at its time limit plays on for a leader ("sudden death") before it
+// ends tied anyway; -1 plays on until somebody leads
+static REAL sg_limitTimeOvertime = -1;
+static tSettingItem<REAL> sg_limitTimeOvertimeConf( "LIMIT_TIME_OVERTIME", sg_limitTimeOvertime );
 
 extern void sg_DetermineSpawnPoint(ePlayerNetID *p,eCoord &pos,eCoord &dir);
 
@@ -4189,6 +4243,69 @@ static tAccessLevelSetter sg_respawnallConfLevel( sg_respawnall_conf, tAccessLev
 #define RESPAWN_HACK
 
 #ifdef RESPAWN_HACK
+// A human who joins a respawn game in progress is held for the first cycle until their client's
+// timer is in sync, so the cycle does not ride unseen. A browser client told RESPAWN_JOIN_READY
+// says when it is in sync (client_ready below) and rides that many seconds later, at most
+// RESPAWN_JOIN_READY_MAX after joining; other clients are held RESPAWN_JOIN_DELAY. A delay of 0
+// spawns at once; RESPAWN_JOIN_READY -1 treats browsers like the rest.
+static REAL sg_respawnJoinDelay = 6;
+static tSettingItem<REAL> sg_respawnJoinDelayConf( "RESPAWN_JOIN_DELAY", sg_respawnJoinDelay );
+static float sg_respawnJoinReady = 2;
+static gBrowserClientSetting sg_respawnJoinReadyConfig( "RESPAWN_JOIN_READY", sg_respawnJoinReady );
+static REAL sg_respawnJoinReadyMax = 12;
+static tSettingItem<REAL> sg_respawnJoinReadyMaxConf( "RESPAWN_JOIN_READY_MAX", sg_respawnJoinReadyMax );
+
+// when sg_Respawn first saw each player without a cycle (game time), while it holds them
+static std::map< ePlayerNetID const *, REAL > sg_joinedWithoutCycle;
+// when each player's client said it was in sync (game time), for as long as the player stays
+static std::map< ePlayerNetID const *, REAL > sg_clientReadyAt;
+
+// client_ready: the client's game timer is in sync; every player of that client counts as ready
+static void sg_ClientReady( nMessage & m )
+{
+    if ( sn_GetNetState() != nSERVER )
+        return;
+    REAL now = se_GameTime();
+    for ( int i = se_PlayerNetIDs.Len()-1; i >= 0; --i )
+        if ( se_PlayerNetIDs(i)->Owner() == m.SenderID() )
+            sg_clientReadyAt[ se_PlayerNetIDs(i) ] = now;
+}
+static nDescriptor sg_clientReady( 313, sg_ClientReady, "client_ready" );
+
+// whether a player without a cycle is still held
+static bool sg_JoinDelayHolds( ePlayerNetID const * p, REAL time )
+{
+    if ( !p->IsHuman() )
+        return false;
+    bool says = sg_respawnJoinReady >= 0 && sn_IsVirtualPeer( p->Owner() );
+    REAL wait = says ? sg_respawnJoinReadyMax : sg_respawnJoinDelay;
+    if ( wait <= 0 )
+        return false;
+    std::map< ePlayerNetID const *, REAL >::iterator it = sg_joinedWithoutCycle.find( p );
+    // first seen now, or a new round started the game clock again
+    if ( it == sg_joinedWithoutCycle.end() || time < it->second )
+    {
+        sg_joinedWithoutCycle[ p ] = time;
+        it = sg_joinedWithoutCycle.find( p );
+    }
+    REAL release = it->second + wait;
+    if ( says )
+    {
+        std::map< ePlayerNetID const *, REAL >::iterator ready = sg_clientReadyAt.find( p );
+        if ( ready != sg_clientReadyAt.end() )
+        {
+            // said in an earlier round (the game clock started again): in sync long since
+            if ( ready->second > time )
+                ready->second = time - sg_respawnJoinReady;
+            release = std::min( release, ready->second + REAL( sg_respawnJoinReady ) );
+        }
+    }
+    if ( time < release )
+        return true;
+    sg_joinedWithoutCycle.erase( it );
+    return false;
+}
+
 // Respawns cycles (crude test)
 static void sg_Respawn( REAL time, eGrid *grid, gArena & arena )
 {
@@ -4196,6 +4313,20 @@ static void sg_Respawn( REAL time, eGrid *grid, gArena & arena )
     {
         return;
     }
+
+    // forget the players who left (a later player may get the same address)
+    std::map< ePlayerNetID const *, REAL > * const books[] = { &sg_joinedWithoutCycle, &sg_clientReadyAt };
+    for ( std::map< ePlayerNetID const *, REAL > * book: books )
+        for ( std::map< ePlayerNetID const *, REAL >::iterator it = book->begin(); it != book->end(); )
+        {
+            bool present = false;
+            for ( int i = se_PlayerNetIDs.Len()-1; i >= 0 && !present; --i )
+                present = se_PlayerNetIDs(i) == it->first;
+            if ( present )
+                ++it;
+            else
+                book->erase( it++ );
+        }
 
     for ( int i = se_PlayerNetIDs.Len()-1; i >= 0; --i )
     {
@@ -4208,6 +4339,10 @@ static void sg_Respawn( REAL time, eGrid *grid, gArena & arena )
 
         if ( ( (!e) || ((!e->Alive()) && (e->DeathTime() < (time - sg_respawnTime)) ) && (sn_GetNetState() != nCLIENT )))
         {
+            // a player who has no cycle yet (just joined) waits for their client first
+            if ( !e && sg_JoinDelayHolds( p, time ) )
+                continue;
+
             eCoord pos,dir;
 #if 0
             if ( e )
@@ -4298,8 +4433,9 @@ void gGame::Timestep(REAL time,bool cam){
 #endif
 
 #ifdef RESPAWN_HACK
-    // Only respawn when the round is in play mode and while the deathzone is not active.
-    if( state == GS_PLAY && time > 0 && winner == 0 && !winDeathZone_ )
+    // Only respawn when the round is in play mode and while the deathzone is not active,
+    // and not once the match is decided.
+    if( state == GS_PLAY && time > 0 && winner == 0 && !winDeathZone_ && !absolute_winner )
     {
         sg_Respawn(time,grid,Arena);
     }
@@ -4695,7 +4831,26 @@ void gGame::Analysis(REAL time){
         humans += t->NumHumanPlayers();
         ais    += t->NumAIPlayers();
 
-        if ( t->Alive() )
+        // in a respawn match, players waiting to respawn keep their team in the round
+        bool respawning = false;
+        for (int j=t->NumPlayers()-1; j>=0; --j)
+        {
+            ePlayerNetID* p = t->Player(j);
+            if ( sg_WaitingToRespawn( p ) )
+            {
+                respawning = true;
+                if ( p->IsHuman() )
+                {
+                    alive++;
+                    if (p->IsActive())
+                        alive_and_not_disconnected++;
+                }
+                else
+                    ai_alive++;
+            }
+        }
+
+        if ( t->Alive() || respawning )
         {
             teams_alive++;
             last_team_alive = i;
@@ -4803,8 +4958,9 @@ void gGame::Analysis(REAL time){
 
     static nVersionFeature winZone(2);
 
-    // activate instant win zone
-    if ( winZone.Supported() && !bool( winDeathZone_ ) && winner == 0 && time - lastdeath > sg_currentSettings->winZoneMinLastDeath && time > sg_currentSettings->winZoneMinRoundTime )
+    // activate instant win zone (never in a respawn match: deaths don't count there, and the
+    // zone would end the match's only round)
+    if ( winZone.Supported() && !bool( winDeathZone_ ) && winner == 0 && !sg_RespawnMatch() && time - lastdeath > sg_currentSettings->winZoneMinLastDeath && time > sg_currentSettings->winZoneMinRoundTime )
     {
         winDeathZone_ = sg_CreateWinDeathZone( grid, Arena.GetRandomPos( sg_winZoneRandomness ) );
     }
@@ -4819,6 +4975,10 @@ void gGame::Analysis(REAL time){
         int humanTeamsClamp = human_teams;
         if ( humanTeamsClamp > 2 )
             humanTeamsClamp = 2;
+        // a respawn match is one long round: players join it as it runs, so only the first
+        // human arriving or the last one leaving starts a new match
+        if ( humanTeamsClamp > 1 && sg_RespawnMatch() )
+            humanTeamsClamp = 1;
         if ( humanTeamsClamp != lastTeams )
         {
             StartNewMatch();
@@ -4837,6 +4997,9 @@ void gGame::Analysis(REAL time){
         }
 
         lastTeams=humanTeamsClamp; // update last team count
+
+        // a private room's rematch: the same restart, asked for by the platform layer
+        if ( gPlatformEvents::TakeMatchRestart() ) { StartNewMatch(); if ( time < -100 ) StartNewMatchNow(); else { winner=-1; wintimer=time; } }
     }
 
     //! Send to /var/online_players.txt
@@ -5033,8 +5196,23 @@ void gGame::Analysis(REAL time){
         ePlayerNetID::SortByScore();
         eTeam::SortByScore();
         if ( eTeam::teams.Len() > 0 ) {
-            if (eTeam::teams.Len() <= 1
-                    || ( eTeam::teams(0)->Score() > eTeam::teams(1)->Score()/* && sg_EnemyExists(0)*/)){
+            bool const leader = eTeam::teams.Len() <= 1
+                    || ( eTeam::teams(0)->Score() > eTeam::teams(1)->Score()/* && sg_EnemyExists(0)*/);
+
+            // a match tied at its time limit plays on until somebody leads, for at most
+            // LIMIT_TIME_OVERTIME seconds (announced only then); then the first of the ranking takes it
+            double const timeLimit = startTime+sg_currentSettings->limitTime*60;
+            bool const overtime = sg_limitTimeOvertime >= 0 && tSysTimeFloat() >= timeLimit;
+            bool const overtimeOver = overtime && tSysTimeFloat() >= timeLimit + sg_limitTimeOvertime;
+            if ( !leader && overtime && !overtimeOver && warning < 7 )
+            {
+                tOutput o("$gamestate_sudden_death");
+                sn_CenterMessage(o);
+                sn_ConsoleOut(o);
+                warning=7; // after the six time limit warnings: once a match
+            }
+
+            if ( leader || overtimeOver ){
 
                 // only then we can have a true winner:
                 if (
@@ -5163,6 +5341,7 @@ void gGame::Analysis(REAL time){
                         sn_ConsoleOut(message);
                         wintimer=time;
                         absolute_winner=1;
+                        gPlatformEvents::MatchDecided();
 
                         if ( se_mainGameTimer )
                             se_mainGameTimer->speed = 1;
@@ -5215,6 +5394,7 @@ void gGame::Analysis(REAL time){
                 )
            )
         {
+            gPlatformEvents::RoundEnded( rounds );
             rounds++;
             SetState(GS_PLAY,GS_DELETE_OBJECTS);
         }
@@ -5242,6 +5422,7 @@ void gGame::StartNewMatchNow(){
 
     ePlayerNetID::ThrowOutDisconnected();
     ePlayerNetID::ResetScore();
+    gPlatformEvents::MatchStarted();
 }
 
 #ifdef DEBUG
@@ -5302,6 +5483,26 @@ static uActionTooltip ingamemenuTooltip( ingamemenu, 1 );
 
 static eLadderLogWriter sg_gameTimeWriter("GAME_TIME", true);
 
+// Grid cleanup: an expired wall leaves the grid only when simplification reaches its edge. The stock
+// loop tries 10 edges a frame, which long respawn rounds outgrow. GRID_SIMPLIFY_SHARE tries that share
+// of the edges each frame (at least GRID_SIMPLIFY_MIN), even when the simplification credits have run
+// out, so a pass over the grid takes 1/share frames whatever its size.
+static int sg_gridSimplifyMin = 10;
+static tSettingItem< int > sg_gridSimplifyMinConf( "GRID_SIMPLIFY_MIN", sg_gridSimplifyMin );
+static REAL sg_gridSimplifyShare = .005;
+static tSettingItem< REAL > sg_gridSimplifyShareConf( "GRID_SIMPLIFY_SHARE", sg_gridSimplifyShare );
+
+static int sg_GridSimplifyShareCount( eGrid const * grid )
+{
+    return static_cast< int >( grid->NumEdges() * sg_gridSimplifyShare );
+}
+
+static int sg_GridSimplifyCount( eGrid const * grid )
+{
+    int count = sg_GridSimplifyShareCount( grid );
+    return count > sg_gridSimplifyMin ? count : sg_gridSimplifyMin;
+}
+
 bool gGame::GameLoop(bool input){
     nNetState netstate = sn_GetNetState();
 
@@ -5309,7 +5510,7 @@ bool gGame::GameLoop(bool input){
     grid->Check();
     if (simplify_grid)
 #endif
-        grid->SimplifyAll(10);
+        grid->SimplifyAll( sg_GridSimplifyCount( grid ), sg_GridSimplifyShareCount( grid ) );
 
 #ifdef DEBUG
     grid->Check();
@@ -5558,6 +5759,7 @@ bool gGame::GameLoop(bool input){
                     ai->Timestep(gtime);
             }
 
+            gPlatformEvents::Playing();
             Analysis(gtime);
 
             // wait for chatting players
@@ -5789,6 +5991,16 @@ void sg_EnterGameCleanup()
 
     gQueuePlayers::Reset();
 
+#ifdef DEDICATED
+    if ( sn_GetNetState() == nSERVER && !uMenu::quickexit )
+    {
+        // sg_HostGame hosts again right away: keep the sockets and the browser transport,
+        // so a handshake in flight (a reloaded page rejoining the emptied room) survives;
+        // its login is answered once we are a server again
+        nSocketResetInhibitor inhibitor;
+        sn_SetNetState( nSTANDALONE );
+    }
+#endif
     sn_SetNetState( nSTANDALONE );
 
     // delete all AI players

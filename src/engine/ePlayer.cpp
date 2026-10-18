@@ -42,10 +42,13 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <fstream>
 #include <iostream>
 #include <deque>
+#include <vector>
 #include <algorithm>
 #include "rRender.h"
 #include "rSysdep.h"
 #include "nAuthentication.h"
+#include "ePlatform.h"
+#include "tUtf8.h"
 #include "tDirectories.h"
 #include "eVoter.h"
 #include "tReferenceHolder.h"
@@ -929,20 +932,43 @@ static void ResultCallback( nKrawall::nCheckResult const & result )
 
     tString authName = username + "@" + authority;
 
-    // seach for double login
+    // seach for double login; a platform token login replaces the session of another connection
+    std::vector< int > replaced;
     for ( int i = se_PlayerNetIDs.Len()-1; i>=0; --i )
     {
         ePlayerNetID* player2 = se_PlayerNetIDs(i);
         if ( player2->IsAuthenticated() && player2->GetRawAuthenticatedName() == authName )
         {
+            if ( success && ePlatform::LoginReplacesOld( player->Owner(), player2->Owner(), ePlatform::CurrentLoginMethod() ) )
+            {
+                replaced.push_back( player2->Owner() );
+                continue;
+            }
+
             sn_ConsoleOut( tOutput("$login_request_failed_dup"), player->Owner() );
             return;
         }
     }
 
+    for ( int owner : replaced )
+    {
+        // the server ends the old session; we are in the new connection's security context
+        tCurrentAccessLevel elevator( tAccessLevel_Owner, true );
+        for ( int i = se_PlayerNetIDs.Len()-1; i>=0; --i )
+        {
+            ePlayerNetID* player2 = se_PlayerNetIDs(i);
+            if ( player2->Owner() == owner && player2->GetRawAuthenticatedName() == authName )
+            {
+                player2->DeAuthenticate();
+            }
+        }
+        sn_KickUser( owner, tOutput("$login_replaced_elsewhere"), 0 );
+    }
+
     if (success)
     {
         player->Authenticate( authName, result.accessLevel );
+        ePlatform::PlayerAuthenticated( player, authName );
 
         // log blurb to ladderlog. This is not important for debug playback,
         // so we just don't record it. Once more is done with the blurb,
@@ -1172,6 +1198,7 @@ ePlayer::ePlayer()
     nAuthentication::SetUserPasswordCallback(&PasswordCallback);
 #ifdef KRAWALL_SERVER
     nAuthentication::SetLoginResultCallback (&ResultCallback);
+    ePlatform::SetLoginResultCallback(&ResultCallback);
 #endif
 
     lastTooltip_ = -100;
@@ -1623,6 +1650,10 @@ static nVersionFeature se_chatHandlerClient( 6 );
 void handle_chat( nMessage& );
 static nDescriptor chat_handler(200,handle_chat,"Chat");
 
+// what the server does with a chat line; the platform (ePlatform.h) delivers the lines it held through it
+static void se_HandleChatLine( ePlayerNetID * player, tColoredString say );
+bool se_platformChatHandlerRegistered = ( ePlatform::SetChatDeliverCallback( &se_HandleChatLine ), true );
+
 // checks whether text_to_search contains search_for_text
 bool Contains( const tString & search_for_text, const tString & text_to_search )
 {
@@ -1835,16 +1866,78 @@ void handle_chat_client(nMessage &m)
     }
 }
 
+// ---- UTF-8 chat ---------------------------------------------------------------------------
+// Browser clients in official rooms write chat as UTF-8, so Korean, Chinese and Japanese get
+// through (tools/tUtf8.h). With CHAT_UTF8 1 the room carries it: browser clients get a line as
+// written, desktop clients a Latin-1 fold ("Cycler42: [message in Korean]"). With 0 it is
+// folded as it arrives, and the room stays Latin-1 for everyone.
+static bool se_chatUtf8 = true;
+static tSettingItem< bool > se_chatUtf8Conf( "CHAT_UTF8", se_chatUtf8 );
+
+// whether a client writes its chat as UTF-8 and can read it: a browser client (the page tells
+// the browser client to write UTF-8 only in official rooms; elsewhere it writes Latin-1, which
+// the same reading leaves as it is)
+static bool se_Utf8Client( int client )
+{
+    return client > 0 && sn_IsVirtualPeer( client );
+}
+
+// whether a client gets chat with UTF-8 in it as written
+static bool se_Utf8Reader( int client )
+{
+    return se_chatUtf8 && se_Utf8Client( client );
+}
+
+// a chat message for a client that reads Latin-1: a message with Korean, Japanese or Chinese
+// in it is named by its language, anything else is folded character by character
+static tString se_FoldChat( tString const & message )
+{
+    std::string const text( static_cast< char const * >( message ) );
+    switch ( tUtf8ScriptOf( text ) )
+    {
+    case tUtf8Script_Korean:
+        return tString( tOutput( "$chat_message_in_korean" ) );
+    case tUtf8Script_Japanese:
+        return tString( tOutput( "$chat_message_in_japanese" ) );
+    case tUtf8Script_Chinese:
+        return tString( tOutput( "$chat_message_in_chinese" ) );
+    default:
+        return tString( tUtf8ToLatin1( text ).c_str() );
+    }
+}
+
+// a whole formatted line (/me, an announcement) for a client that reads Latin-1: each
+// stretch of Korean, Japanese or Chinese is named by its language
+static tString se_FoldChatLine( tString const & line )
+{
+    return tString( tUtf8FoldRuns( static_cast< char const * >( line ),
+                                   static_cast< char const * >( tString( tOutput( "$chat_run_korean" ) ) ),
+                                   static_cast< char const * >( tString( tOutput( "$chat_run_japanese" ) ) ),
+                                   static_cast< char const * >( tString( tOutput( "$chat_run_chinese" ) ) ) ).c_str() );
+}
+
+// whether a message needs a second form for Latin-1 clients
+static bool se_NeedsFold( tString const & message )
+{
+    return se_FoldChat( message ) != message;
+}
+
+// the characters of a chat message (a UTF-8 sequence is one; Latin-1 bytes are one each)
+static int se_ChatLength( tString const & message )
+{
+    return static_cast< int >( tUtf8Length( static_cast< char const * >( message ) ) );
+}
+
 // appends chat message to something
 template< class TARGET >
 void se_AppendChat( TARGET & out, tString const & message )
 {
-    if ( message.Len() <= se_SpamMaxLen*2 || se_SpamMaxLen == 0 )
+    // the limit counts characters, so a UTF-8 message is cut where a character ends
+    if ( se_ChatLength( message ) < se_SpamMaxLen*2 || se_SpamMaxLen == 0 )
         out << tColoredString::EscapeBadColors(message,"0xffff7f");
     else
     {
-        tString cut( message );
-        cut.SetLen( se_SpamMaxLen*2 );
+        tString cut( tUtf8Cut( static_cast< char const * >( message ), se_SpamMaxLen*2 - 1 ).c_str() );
         out << tColoredString::EscapeBadColors(cut,"0xffff7f");
     }
 }
@@ -1974,12 +2067,24 @@ static nMessage* se_OldChatMessage( ePlayerNetID const * player, tString const &
 // sends the full chat line to receiver, marked as originating from <sender> so
 // it can be silenced.
 // ( the client will see <fullLine> resp. <sender name> : <forOldClients> if it is pre-0.2.8 and at least 0.2.6 )
-void se_SendChatLine( ePlayerNetID* sender, const tString& fullLine, const tString& forOldClients, int receiver )
+static void se_SendChatLineChecked( ePlayerNetID* sender, const tString& checkedAsWritten, const tString& forOldClientsAsWritten, int receiver );
+void se_SendChatLine( ePlayerNetID* sender, const tString& fullLineAsWritten, const tString& forOldClientsAsWritten, int receiver )
 {
-    tString retStr(fullLine);
+    tString retStr(fullLineAsWritten);
 
     if (eBannedWords::BadWordTrigger(sender, retStr))
         return;
+
+    se_SendChatLineChecked( sender, retStr, forOldClientsAsWritten, receiver );
+}
+
+// se_SendChatLine after the banned words check (run once per line, not per receiver: option 1
+// warns the sender): a client that reads Latin-1 gets the line folded
+static void se_SendChatLineChecked( ePlayerNetID* sender, const tString& checkedAsWritten, const tString& forOldClientsAsWritten, int receiver )
+{
+    bool const fold = !se_Utf8Reader( receiver );
+    tString const retStr = fold ? se_FoldChatLine( checkedAsWritten ) : checkedAsWritten;
+    tString const forOldClients = fold ? se_FoldChatLine( forOldClientsAsWritten ) : forOldClientsAsWritten;
 
     // create chat messages
 
@@ -2014,6 +2119,16 @@ void se_BroadcastChatLine( ePlayerNetID* sender, const tString& line, const tStr
     if (eBannedWords::BadWordTrigger(sender, retStr))
         return;
 
+    // a line with UTF-8 in it goes as written to the clients that read it and folded to the
+    // others
+    if ( se_NeedsFold( retStr ) || se_NeedsFold( forOldClients ) )
+    {
+        for ( int user = MAXCLIENTS; user > 0; --user )
+            if ( sn_Connections[ user ].socket )
+                se_SendChatLineChecked( sender, retStr, forOldClients, user );
+        return;
+    }
+
     // create chat messages
     tJUST_CONTROLLED_PTR< nMessage > mServerControlled = se_ServerControlledChatMessageConsole( sender, retStr );
     tJUST_CONTROLLED_PTR< nMessage > mNew = se_NewChatMessage( sender, forOldClients );
@@ -2043,35 +2158,47 @@ void se_BroadcastChat( ePlayerNetID* sender, const tString& say )
     if (eBannedWords::BadWordTrigger(sender, retStr))
         return;
 
+    // a message with UTF-8 in it has a second, folded form for the clients that read Latin-1;
+    // usually the two are the same and only one set is made
+    tString const folded = se_FoldChat( retStr );
+    bool const twoForms = folded != retStr;
+
     // create chat messages
     tJUST_CONTROLLED_PTR< nMessage > mServerControlled = se_ServerControlledChatMessage( sender, retStr );
     tJUST_CONTROLLED_PTR< nMessage > mNew = se_NewChatMessage( sender, retStr );
     tJUST_CONTROLLED_PTR< nMessage > mOld = se_OldChatMessage( sender, retStr );
+    tJUST_CONTROLLED_PTR< nMessage > fServerControlled = twoForms ? se_ServerControlledChatMessage( sender, folded ) : static_cast< nMessage * >( mServerControlled );
+    tJUST_CONTROLLED_PTR< nMessage > fNew = twoForms ? se_NewChatMessage( sender, folded ) : static_cast< nMessage * >( mNew );
+    tJUST_CONTROLLED_PTR< nMessage > fOld = twoForms ? se_OldChatMessage( sender, folded ) : static_cast< nMessage * >( mOld );
 
     // send them to the users, depending on what they understand
     for ( int user = MAXCLIENTS; user > 0; --user )
     {
         if ( sn_Connections[ user ].socket )
         {
+            bool const asWritten = !twoForms || se_Utf8Reader( user );
             if ( se_chatHandlerClient.Supported( user ) )
-                mServerControlled->Send( user );
+                ( asWritten ? mServerControlled : fServerControlled )->Send( user );
             else if ( se_chatRelay.Supported( user ) )
-                mNew->Send( user );
+                ( asWritten ? mNew : fNew )->Send( user );
             else
-                mOld->Send( user );
+                ( asWritten ? mOld : fOld )->Send( user );
         }
     }
 }
 
 
 // sends a private message from sender to receiver, and really sends it to eavesdropper (will usually be equal to receiver)
-void se_SendPrivateMessage( ePlayerNetID const * sender, ePlayerNetID const * receiver, ePlayerNetID const * eavesdropper, tString const & message )
+void se_SendPrivateMessage( ePlayerNetID const * sender, ePlayerNetID const * receiver, ePlayerNetID const * eavesdropper, tString const & messageAsWritten )
 {
     tASSERT( sender );
     tASSERT( receiver );
 
     // determine receiver client id
     int cid = eavesdropper->Owner();
+
+    // folded for a client that reads Latin-1
+    tString const message = se_Utf8Reader( cid ) ? messageAsWritten : se_FoldChat( messageAsWritten );
 
     // determine wheter the receiver knows about the server controlled chat message
     if ( se_chatHandlerClient.Supported( cid ) )
@@ -2102,7 +2229,7 @@ void se_SendPrivateMessage( ePlayerNetID const * sender, ePlayerNetID const * re
 }
 
 // Sends a /team message
-void se_SendTeamMessage( eTeam const * team, ePlayerNetID const * sender ,ePlayerNetID const * receiver, tString const & message )
+void se_SendTeamMessage( eTeam const * team, ePlayerNetID const * sender ,ePlayerNetID const * receiver, tString const & messageAsWritten )
 {
     tASSERT( receiver );
     tASSERT( sender );
@@ -2111,8 +2238,10 @@ void se_SendTeamMessage( eTeam const * team, ePlayerNetID const * sender ,ePlaye
     if ( clientID == 0 )
         return;
 
-    if ( se_chatHandlerClient.Supported( clientID ) )
-    {
+    // folded for a client that reads Latin-1
+    tString const message = se_Utf8Reader( clientID ) ? messageAsWritten : se_FoldChat( messageAsWritten );
+
+    if ( se_chatHandlerClient.Supported( clientID ) ) {
         se_ServerControlledChatMessage( team, sender, message )->Send( clientID );
     }
     else
@@ -3340,7 +3469,7 @@ static void se_ChatShout( ePlayerNetID * p, tString const & say, eChatSpamTester
         return;
     }
 
-    if ( say.Len() <= se_SpamMaxLen+2 && !IsSilencedWithWarning(p) )
+    if ( se_ChatLength( say ) <= se_SpamMaxLen+1 && !IsSilencedWithWarning(p) )
     {
         se_BroadcastChat( p, say );
         se_DisplayChatLocally( p, say);
@@ -4418,7 +4547,16 @@ void handle_chat( nMessage &m )
     unsigned short id;
     m.Read(id);
     tColoredString say;
-    m >> say;
+    if ( sn_GetNetState() == nSERVER && se_Utf8Client( m.SenderID() ) )
+    {
+        // a browser client's line: well formed UTF-8 stays whole, and a room
+        // that keeps to Latin-1 folds it right here
+        m.ReadUtf8( say );
+        if ( !se_chatUtf8 )
+            say = tColoredString( tUtf8ToLatin1( static_cast< char const * >( say ) ).c_str() );
+    }
+    else
+        m >> say;
 
     tJUST_CONTROLLED_PTR< ePlayerNetID > p=dynamic_cast<ePlayerNetID *>(nNetObject::ObjectDangerous(id));
 
@@ -4440,6 +4578,27 @@ void handle_chat( nMessage &m )
                 nReadError();
                 return;
             }
+
+            // the platform may hold the line for a moderation verdict (engine/ePlatform.h)
+            if ( ePlatform::ChatSubmitted( p, say ) )
+                return;
+        }
+    }
+
+    se_HandleChatLine( p, say );
+}
+
+// the server's handling of a chat line (also for the lines the platform held)
+static void se_HandleChatLine( ePlayerNetID * player, tColoredString say )
+{
+    tJUST_CONTROLLED_PTR< ePlayerNetID > p = player;
+
+    if(sn_GetNetState()==nSERVER)
+    {
+        if (p)
+        {
+            // for the duration of this function, set the access level to the level of the user.
+            tCurrentAccessLevel levelOverride( p->GetAccessLevel(), true );
 
             eChatSpamTester spam( p, say );
 
@@ -7760,6 +7919,7 @@ void ePlayerNetID::ReadSync(nMessage &m)
     // first sync message
     if ( firstSync && sn_GetNetState() == nSERVER )
     {
+        nameRequested_ = nameFromClient_;
         UpdateName();
 
 #ifndef KRAWALL_SERVER
@@ -7769,6 +7929,11 @@ void ePlayerNetID::ReadSync(nMessage &m)
         SetDefaultTeam();
 
         RequestSync();
+    }
+    else if ( sn_GetNetState() == nSERVER )
+    {
+        // a name asked for later
+        RequestNameChange();
     }
 
 }
@@ -10702,6 +10867,35 @@ static tString sg_options("Nothing special.");
 static tConfItemLine sg_optionsConf( "SERVER_OPTIONS", sg_options );
 #endif
 
+// SERVER_MODE: the kind of game the server runs, in the words players use (Fortress, Team Sumo,
+// Sumobar, Free-for-all, ...), so server browsers can show and filter by it. The master servers
+// carry it as the first line of the options text ("Mode: Fortress"); a server on a platform also
+// reports it in its heartbeats. Empty: not reported.
+static tString se_serverMode("");
+#ifdef DEDICATED
+static tConfItemLine se_serverModeConf( "SERVER_MODE", se_serverMode );
+#endif
+
+tString se_ServerMode()
+{
+    // one line, trimmed, at most 32 characters: it heads the options text and is a label in a list
+    std::string mode;
+    for ( int i = 0; i < se_serverMode.Len() - 1; ++i )
+    {
+        char const c = se_serverMode(i);
+        if ( c == '\n' || c == '\r' )
+            break;
+        mode += c;
+    }
+    std::size_t const first = mode.find_first_not_of( " \t" );
+    if ( first == std::string::npos )
+        return tString();
+    mode = mode.substr( first, mode.find_last_not_of( " \t" ) - first + 1 );
+    if ( mode.size() > 32 )
+        mode.resize( 32 );
+    return tString( mode.c_str() );
+}
+
 class gServerInfoAdmin: public nServerInfoAdmin
 {
 public:
@@ -10753,7 +10947,15 @@ private:
     virtual tString GetOptions() const
     {
         se_CutString( sg_options, 240 );
-        return sg_options;
+        tString const mode = se_ServerMode();
+        if ( mode.Len() <= 1 )
+            return sg_options;
+
+        // SERVER_MODE as the first line, so it survives the cut and is easy to read back
+        tString ret;
+        ret << "Mode: " << mode << "\n" << sg_options;
+        se_CutString( ret, 240 );
+        return ret;
     }
 
     virtual tString GetUrl() const
@@ -10869,7 +11071,12 @@ public:
                     voter->PlayerChanged();
                 }
 
-                if ( adminRename_ )
+                if ( player_.quietRename_ )
+                {
+                    // renamed for an offensive name: the old one is not repeated
+                    mess << "$player_renamed_moderation";
+                }
+                else if ( adminRename_ )
                 {
                     // if our player isn't able to rename, he didn't do it alone, did he ? :)
                     mess << "$player_got_renamed";
@@ -10924,7 +11131,10 @@ void ePlayerNetID::UpdateName( void )
     {
         // apply name filters only on remote players
         if ( Owner() != 0 )
+        {
             se_OptionalNameFilters( nameFromClient_, Owner() );
+            CheckNameAllowed();
+        }
 
         // nothing wrong ? proceed to renaming
         nameFromAdmin_ = nameFromServer_ = nameFromClient_;
@@ -10983,6 +11193,9 @@ void ePlayerNetID::UpdateName( void )
 
     if ( name_ != newName || lastAccessLevel != GetAccessLevel() )
     {
+        // a change waiting for this update is done
+        nameChangeDeferred_ = false;
+
         // copy it to the name, removing colors of course
         name_ = newName;
 
@@ -11031,6 +11244,145 @@ void ePlayerNetID::AllowRename( bool allow )
 {
     // simple eh ? :-)
     renameAllowed_ = allow;
+    if ( allow )
+        moderationLock_ = false;
+}
+
+// name changes a client asks for while playing are applied at once, within these limits; the
+// rest wait for the next round, where only the latest name asked for counts
+static bool se_nameChangeAtOnce = true;
+static tSettingItem< bool > se_nameChangeAtOnceConf( "NAME_CHANGE_AT_ONCE", se_nameChangeAtOnce );
+static REAL se_nameChangeCooldown = 30;
+static tSettingItem< REAL > se_nameChangeCooldownConf( "NAME_CHANGE_COOLDOWN", se_nameChangeCooldown );
+static int se_nameChangesPerWindow = 3;
+static tSettingItem< int > se_nameChangesPerWindowConf( "NAME_CHANGES_PER_WINDOW", se_nameChangesPerWindow );
+static REAL se_nameChangeWindow = 600;
+static tSettingItem< REAL > se_nameChangeWindowConf( "NAME_CHANGE_WINDOW", se_nameChangeWindow );
+
+// ******************************************************************************************
+// *
+// *    RequestNameChange
+// *
+// ******************************************************************************************
+//!
+//!      The client sent a name other than the one it sent before. Applied at once unless the
+//!      player changed names too often lately; then the next round's update applies it.
+//!
+// ******************************************************************************************
+
+void ePlayerNetID::RequestNameChange()
+{
+    if ( sn_GetNetState() != nSERVER || nameFromClient_ == nameRequested_ )
+        return;
+    nameRequested_ = nameFromClient_;
+
+    if ( !se_nameChangeAtOnce || !IsHuman() || this->ID() == 0 || nameFromClient_ == nameFromServer_ )
+        return;
+
+    // a name that is not allowed is refused at once (the current name stays, nothing counts)
+    if ( !ePlatform::NameAllowed( nameFromClient_ ) )
+    {
+        UpdateName();
+        return;
+    }
+
+    double const now = tSysTimeFloat();
+    while ( !nameChangeTimes_.empty() && now - nameChangeTimes_.front() > se_nameChangeWindow )
+        nameChangeTimes_.pop_front();
+    bool const limited = ( !nameChangeTimes_.empty() && now - nameChangeTimes_.back() < se_nameChangeCooldown )
+                         || static_cast<int>( nameChangeTimes_.size() ) >= se_nameChangesPerWindow;
+    if ( limited )
+    {
+        if ( !nameChangeDeferred_ )
+        {
+            nameChangeDeferred_ = true;
+            sn_ConsoleOut( tOutput( "$player_rename_next_round" ), Owner() );
+        }
+        return;
+    }
+
+    // only the changes made at once count against the limits; the others wait for a round anyway
+    tString const before = name_;
+    UpdateName();
+    if ( name_ != before )
+        nameChangeTimes_.push_back( now );
+}
+
+// ******************************************************************************************
+// *
+// *    CheckNameAllowed
+// *
+// ******************************************************************************************
+//!
+//!      A name the platform's word lists refuse never shows: the player keeps the current name,
+//!      or gets a neutral one when joining with it. The player is told once per refused name.
+//!
+//!      @return false if the name from the client was replaced
+//!
+// ******************************************************************************************
+
+bool ePlayerNetID::CheckNameAllowed()
+{
+    if ( sn_GetNetState() != nSERVER || Owner() == 0 || !IsHuman() || nameFromClient_.Len() <= 1 )
+        return true;
+    if ( ePlatform::NameAllowed( nameFromClient_ ) )
+        return true;
+
+    tString const refused = tColoredString::RemoveColors( nameFromClient_ );
+    if ( this->ID() != 0 && nameFromServer_.Len() > 1 && ePlatform::NameAllowed( nameFromServer_ ) )
+    {
+        nameFromClient_ = nameFromServer_;
+    }
+    else
+    {
+        static char const hex[] = "0123456789abcdef";
+        tRandomizer & randomizer = tRandomizer::GetInstance();
+        tString neutral( "Player " );
+        for ( int i = 0; i < 4; ++i )
+            neutral << hex[ randomizer.Get( 16 ) ];
+        nameFromClient_ = neutral;
+    }
+
+    if ( refused != nameRefused_ )
+    {
+        nameRefused_ = refused;
+        con << "Name not allowed (connection " << Owner() << "): " << refused << "\n";
+        sn_ConsoleOut( tOutput( "$player_name_not_allowed", tColoredString::RemoveColors( nameFromClient_ ) ), Owner() );
+    }
+    return false;
+}
+
+// ******************************************************************************************
+// *
+// *    ModerationRename
+// *
+// ******************************************************************************************
+//!
+//!      @param  name    the new name
+//!
+// ******************************************************************************************
+
+void ePlayerNetID::ModerationRename( tString const & name )
+{
+    if ( sn_GetNetState() != nSERVER )
+        return;
+
+    nameFromAdmin_ = name;
+    nameFromAdmin_.NetFilter();
+    tString colorlessName = tColoredString::RemoveColorsLoose( nameFromAdmin_ );
+    if ( colorlessName.Len() > 16 )
+    {
+        se_CutString( nameFromAdmin_, 16 );
+    }
+
+    // the name stays as given for the rest of the session, as after RENAME
+    AllowRename( false );
+    moderationLock_ = true;
+
+    // at once, announced without the old name
+    quietRename_ = true;
+    UpdateName();
+    quietRename_ = false;
 }
 // Now we're here, set commands for it
 static void AllowRename( std::istream & s , bool allow , bool announce )
@@ -11118,9 +11470,13 @@ bool ePlayerNetID::IsAllowedToRename ( void )
     // didn't we disallow this player to rename via a command ?
     if ( !this->renameAllowed_ )
     {
-        tOutput message( "$player_rename_rejected_admin", nameFromServer_, nameFromClient_ );
-        se_SecretConsoleOut( message, this, &ePlayerNetID::HasRenameCapability, this );
-        con << message;
+        // after a moderation rename the client keeps asking for the refused name: never repeated
+        if ( !moderationLock_ )
+        {
+            tOutput message( "$player_rename_rejected_admin", nameFromServer_, nameFromClient_ );
+            se_SecretConsoleOut( message, this, &ePlayerNetID::HasRenameCapability, this );
+            con << message;
+        }
         return false;
     }
     // don't let the player rename if s/he is silenced.
