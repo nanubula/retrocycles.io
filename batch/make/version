@@ -15,6 +15,30 @@ fi
 # set version parts to defaults for CVS snapshot
 major_version=`cat ${srcdir}/major_version`
 minor_version_proto=`cat ${srcdir}/minor_version`
+
+# a release build: the release tag v<major_version>.<N> (v0.2.9-sty+ct+ap+io.1, .2, ...)
+# names the version, without the v. It comes from RELEASE_TAG or else from a tag of that
+# form on HEAD of a clean git checkout. Everything else is a dev build, numbered below.
+release_version()
+{
+    rv_number="${1#v${major_version}.}"
+    test "${rv_number}" != "$1" || return 1
+    case "${rv_number}" in ''|*[!0-9]*) return 1;; esac
+    echo "${1#v}"
+}
+if ! test -z "${RELEASE_TAG}"; then
+    if release_version "${RELEASE_TAG}"; then
+        exit 0
+    fi
+    echo "version: RELEASE_TAG ${RELEASE_TAG} is not v${major_version}.<number>; building a dev version" >&2
+elif test -e "${srcdir}/.git" && git -C "${srcdir}" update-index --refresh > /dev/null 2>&1 \
+        && git -C "${srcdir}" diff-index --quiet HEAD -- 2> /dev/null; then
+    for release_tag in `git -C "${srcdir}" tag --points-at HEAD "v${major_version}.*" 2> /dev/null`; do
+        if release_version "${release_tag}"; then
+            exit 0
+        fi
+    done
+fi
 DATE=`date +%Y%m%d`
 
 #echo $major_version

@@ -1,0 +1,548 @@
+#!/usr/bin/env bash
+# retrocycles-server: keeps a Retrocycles dedicated server up to date.
+#
+#   retrocycles-server status                  installed and latest version, auto-update, service
+#   retrocycles-server check                   says whether a newer release exists
+#   retrocycles-server update [--yes] [--version V] [--when-empty]
+#   retrocycles-server rollback                back to the version before the last update
+#   retrocycles-server auto-update on|off      daily update while the server is empty
+# ap.sh and the daily timer also use: install-service, switch <version dir>, daily.
+#
+# Releases are the GitHub releases of nanubula/retrocycles.io: a tarball per architecture,
+# SHA256SUMS and its minisign signature. Nothing unsigned is installed. Versions live side
+# by side in $PREFIX/versions/<version>; $PREFIX/current points at the one that runs and
+# $PREFIX/previous at the one before it. The game's settings, logs and state stay in
+# $DATA_DIR and are never touched.
+#
+# Settings: /etc/retrocycles-server.conf (written by ap.sh; RC_CONF overrides the path).
+# RELEASE_API there, or RC_RELEASE_API, points at another releases API (a mirror, a test).
+set -euo pipefail
+
+PUBLIC_KEY="RWSIKpeOYWO+3TDSp+ycEWZ68jvOe8vgRGz2weCXIKYNQorr43zegka+"
+RELEASE_API=https://api.github.com/repos/nanubula/retrocycles.io
+CONF="${RC_CONF:-/etc/retrocycles-server.conf}"
+SELF_PATH=/usr/local/bin/retrocycles-server
+UNIT_DIR=/etc/systemd/system
+
+# defaults; the config file overrides them
+SERVER_USER=""
+PREFIX=""
+DATA_DIR=""
+SERVICE=retrocycles-server
+AUTO_UPDATE=off
+UPDATE_CHECK=on
+WARN_SECONDS=30          # in-game warning before a restart with players online
+HEALTH_SECONDS=60        # how long a restarted server has to come up
+HEALTH_PATTERN='WebRTC: accepting browser clients|Taking a nap'
+EMPTY_POLL_SECONDS=300   # --when-empty: how often to look again while players are online
+EMPTY_WAIT_HOURS=20      # --when-empty: give up for the day after this long
+KEEP_VERSIONS=3          # installed versions kept, besides current and previous
+
+if [ -r "$CONF" ]; then
+    # shellcheck source=/dev/null
+    . "$CONF"
+fi
+RELEASE_API="${RC_RELEASE_API:-$RELEASE_API}"
+
+log() { echo "retrocycles-server: $*"; }
+die() { echo "retrocycles-server: $*" >&2; exit 1; }
+
+need_conf() {
+    [ -n "$SERVER_USER" ] && [ -n "$PREFIX" ] && [ -n "$DATA_DIR" ] ||
+        die "$CONF is missing or lacks SERVER_USER, PREFIX or DATA_DIR; run ap.sh first."
+}
+need_root() { [ "$(id -u)" -eq 0 ] || die "run this as root (sudo retrocycles-server $1)."; }
+
+# --- versions -------------------------------------------------------------------------------
+
+# a release version is <major>.<N>: 0.2.9-sty+ct+ap+io.1; source builds carry other suffixes
+is_release() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[a-z+]+\.[0-9]+$ ]]; }
+
+# true when $1 is newer than $2 (any release is newer than a source build)
+is_newer() {
+    [ "$1" != "$2" ] || return 1
+    is_release "$2" || return 0
+    [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]
+}
+
+version_of() { # version_of <dir>
+    if [ -r "$1/VERSION" ]; then head -n 1 "$1/VERSION"; else basename "$(readlink -f "$1")"; fi
+}
+installed_version() { [ -e "$PREFIX/current" ] && version_of "$PREFIX/current"; }
+previous_version() { [ -e "$PREFIX/previous" ] && version_of "$PREFIX/previous"; }
+
+arch() {
+    case "$(uname -m)" in
+        x86_64|amd64) echo x86_64 ;;
+        aarch64|arm64) echo arm64 ;;
+        *) uname -m ;;
+    esac
+}
+
+# --- releases -------------------------------------------------------------------------------
+
+# checks a minisign signature: with minisign where it is installed, else with openssl
+# (Ubuntu 22.04 has no minisign package). Ed25519 over the file's BLAKE2b-512 hash ("ED") or
+# over the file ("Ed"), plus the global signature over the signature and trusted comment.
+verify_signature() { # verify_signature <file> <minisig> <public key>
+    if command -v minisign >/dev/null 2>&1; then
+        minisign -V -q -P "$3" -m "$1" -x "$2"
+        return
+    fi
+    local t rc=1
+    t="$(mktemp -d)"
+    if base64 -d <<<"$3" > "$t/pk" 2>/dev/null && sed -n 2p "$2" | base64 -d > "$t/sig" 2>/dev/null &&
+        sed -n 4p "$2" | base64 -d > "$t/gsig" 2>/dev/null &&
+        [ "$(head -c 2 "$t/pk")" = Ed ] && [ "$(stat -c %s "$t/pk")" = 42 ] && [ "$(stat -c %s "$t/sig")" = 74 ] &&
+        [ "$(tail -c +3 "$t/pk" | head -c 8 | od -An -tx1)" = "$(tail -c +3 "$t/sig" | head -c 8 | od -An -tx1)" ]; then
+        { printf '\x30\x2a\x30\x05\x06\x03\x2b\x65\x70\x03\x21\x00'; tail -c 32 "$t/pk"; } > "$t/pk.der"
+        tail -c 64 "$t/sig" > "$t/sig.bin"
+        case "$(head -c 2 "$t/sig")" in
+            ED) openssl dgst -blake2b512 -binary "$1" > "$t/msg" ;;
+            Ed) cp "$1" "$t/msg" ;;
+            *) : > "$t/msg"; rm -f "$t/sig.bin" ;;
+        esac
+        { cat "$t/sig.bin"; sed -n 3p "$2" | sed 's/^trusted comment: //' | tr -d '\n'; } > "$t/gmsg" 2>/dev/null
+        if [ -s "$t/sig.bin" ] &&
+            openssl pkeyutl -verify -pubin -inkey "$t/pk.der" -keyform DER -rawin -in "$t/msg" -sigfile "$t/sig.bin" >/dev/null 2>&1 &&
+            openssl pkeyutl -verify -pubin -inkey "$t/pk.der" -keyform DER -rawin -in "$t/gmsg" -sigfile "$t/gsig" >/dev/null 2>&1; then
+            rc=0
+        fi
+    fi
+    rm -rf "$t"
+    return "$rc"
+}
+
+RELEASE_JSON=""
+fetch_release() { # fetch_release [version]: sets RELEASE_JSON and RELEASE_VERSION
+    local path=releases/latest
+    if [ -n "${1:-}" ]; then
+        local tag="v${1#v}"
+        path="releases/tags/${tag//+/%2B}"
+    fi
+    RELEASE_JSON="$(curl -fsL --max-time 20 -H 'Accept: application/vnd.github+json' \
+        "$RELEASE_API/$path")" || return 1
+    RELEASE_VERSION="$(jq -r '.tag_name' <<<"$RELEASE_JSON")"
+    RELEASE_VERSION="${RELEASE_VERSION#v}"
+    is_release "$RELEASE_VERSION" || { log "unexpected release tag '$RELEASE_VERSION'"; return 1; }
+}
+
+asset_url() { jq -r --arg n "$1" '.assets[] | select(.name == $n) | .browser_download_url' <<<"$RELEASE_JSON"; }
+
+# downloads the release tarball for this machine into $1 and checks the signed sums;
+# prints the tarball's path
+download_verified() {
+    local dir="$1" tarball url
+    tarball="retrocycles-server-$RELEASE_VERSION-linux-$(arch).tar.gz"
+    for f in "$tarball" SHA256SUMS SHA256SUMS.minisig; do
+        url="$(asset_url "$f")"
+        [ -n "$url" ] || die "release $RELEASE_VERSION has no $f (no build for $(arch)?)."
+        curl -fsSL --max-time 900 -o "$dir/$f" "$url" || die "download of $f failed."
+    done
+    verify_signature "$dir/SHA256SUMS" "$dir/SHA256SUMS.minisig" "$PUBLIC_KEY" ||
+        die "SHA256SUMS of $RELEASE_VERSION has no valid signature; nothing installed."
+    local want got
+    want="$(awk -v f="$tarball" '$2 == f || $2 == "*" f { print $1 }' "$dir/SHA256SUMS")"
+    got="$(sha256sum "$dir/$tarball" | cut -d ' ' -f 1)"
+    [ -n "$want" ] && [ "$want" = "$got" ] || die "$tarball does not match the signed SHA256SUMS; nothing installed."
+    echo "$dir/$tarball"
+}
+
+# unpacks a verified tarball into $PREFIX/versions/<version>
+unpack() { # unpack <tarball> <version>
+    local dest="$PREFIX/versions/$2" tmp
+    if [ -x "$dest/bin/armagetronad-dedicated" ] && [ "$(version_of "$dest")" = "$2" ]; then
+        return 0
+    fi
+    install -d -o "$SERVER_USER" -g "$(id -gn "$SERVER_USER")" "$PREFIX" "$PREFIX/versions"
+    tmp="$(mktemp -d "$PREFIX/versions/.unpack.XXXXXX")"
+    tar -xzf "$1" -C "$tmp" --no-same-owner
+    local top
+    top="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+    [ -x "$top/bin/armagetronad-dedicated" ] || { rm -rf "$tmp"; die "the tarball holds no server."; }
+    rm -rf "$dest"
+    mv "$top" "$dest"
+    rm -rf "$tmp"
+    chown -R "$SERVER_USER:$(id -gn "$SERVER_USER")" "$dest"
+    # the binary must load its libraries here, before anything is restarted
+    runuser -u "$SERVER_USER" -- "$dest/bin/armagetronad-dedicated" --version >/dev/null 2>&1 ||
+        die "the new server does not start on this machine ($dest); nothing changed."
+}
+
+# keeps current, previous and the newest KEEP_VERSIONS others
+prune() {
+    local keep_cur keep_prev n=0 d
+    keep_cur="$(readlink -f "$PREFIX/current" 2>/dev/null || true)"
+    keep_prev="$(readlink -f "$PREFIX/previous" 2>/dev/null || true)"
+    while IFS= read -r d; do
+        [ "$d" = "$keep_cur" ] || [ "$d" = "$keep_prev" ] && continue
+        n=$((n + 1))
+        [ "$n" -gt "$KEEP_VERSIONS" ] && rm -rf "$d"
+    done < <(find "$PREFIX/versions" -mindepth 1 -maxdepth 1 -type d ! -name '.*' -printf '%T@ %p\n' |
+             sort -rn | cut -d ' ' -f 2-)
+}
+
+# --- the running server ---------------------------------------------------------------------
+
+service_active() { systemctl is-active --quiet "$SERVICE"; }
+
+lock() {
+    local f=/run/lock/retrocycles-server.lock
+    [ -d /run/lock ] || f="$PREFIX/.update.lock"
+    exec 9>"$f"
+    flock -n 9 || die "another update or rollback is running."
+}
+
+# human players on the server now. The server rewrites var/online_players.txt every game
+# frame while a match runs, and once more when it goes idle: a map line, then one line per
+# player, "<user> <alive> <ping ms> <score> <access> <name>", or "Nobody Online.". Bots are
+# listed too and have ping 0. A file older than the server's start means nobody came since.
+players_online() {
+    local f="$DATA_DIR/var/online_players.txt" started mtime
+    if ! service_active || [ ! -r "$f" ]; then echo 0; return; fi
+    started="$(systemctl show -p ExecMainStartTimestamp --value "$SERVICE")"
+    started="$(date -d "$started" +%s 2>/dev/null || echo 0)"
+    mtime="$(stat -c %Y "$f")"
+    if [ "$mtime" -lt "$started" ]; then echo 0; return; fi
+    awk 'NR == 1 && /^Nobody Online/ { exit } NR > 1 && NF >= 3 && $3 + 0 != 0 { n++ } END { print n + 0 }' "$f"
+}
+
+# appends console commands to the file the server polls (--input)
+server_command() {
+    local input="$DATA_DIR/var/input.txt"
+    [ -e "$input" ] || return 0
+    printf '%s\n' "$@" >> "$input"
+}
+
+warn_players() { # warn_players <what>
+    local players secs="$WARN_SECONDS"
+    players="$(players_online)"
+    [ "$players" -gt 0 ] && [ "$secs" -gt 0 ] || return 0
+    log "$players player(s) online: warning them, restarting in $secs s."
+    server_command "CONSOLE_MESSAGE 0xff4040Server $1: this server restarts in $secs seconds. Rejoin in a minute." \
+                   "CENTER_MESSAGE 0xff4040Server restart in $secs seconds"
+    if [ "$secs" -gt 5 ]; then
+        sleep $((secs - 5))
+        server_command "CENTER_MESSAGE 0xff4040Server restart in 5 seconds"
+        sleep 5
+    else
+        sleep "$secs"
+    fi
+}
+
+# restarts the service and waits until the new process runs the expected binary and has
+# logged that it is up
+restart_and_check() { # restart_and_check <version dir>
+    local want since pid i
+    want="$(readlink -f "$1/bin/armagetronad-dedicated")"
+    since="$(date '+%Y-%m-%d %H:%M:%S')"
+    systemctl restart "$SERVICE" || true
+    for ((i = 0; i < HEALTH_SECONDS; i++)); do
+        sleep 1
+        service_active || continue
+        pid="$(systemctl show -p MainPID --value "$SERVICE")"
+        [ "${pid:-0}" != 0 ] || continue
+        [ "$(readlink -f "/proc/$pid/exe" 2>/dev/null)" = "$want" ] || continue
+        # grep reads it all (no -q): an early exit would fail the pipe (pipefail)
+        if journalctl -u "$SERVICE" --since "$since" -o cat --no-pager 2>/dev/null | grep -E "$HEALTH_PATTERN" >/dev/null; then
+            # still alive a moment later
+            sleep 3
+            [ "$(systemctl show -p MainPID --value "$SERVICE")" = "$pid" ] && kill -0 "$pid" 2>/dev/null && return 0
+        fi
+    done
+    return 1
+}
+
+point() { # point <link name> <version dir>
+    ln -sfn "$2" "$PREFIX/.$1.new"
+    mv -T "$PREFIX/.$1.new" "$PREFIX/$1"
+    chown -h "$SERVER_USER:$(id -gn "$SERVER_USER")" "$PREFIX/$1"
+}
+
+# makes versions/<dir> current, restarts and checks; puts the old one back if it does not
+# come up. A stopped service stays stopped (the new version runs at its next start) unless
+# "start" is given.
+switch_to() { # switch_to <dir> <what: update|rollback> [start]
+    local new="$PREFIX/versions/$1" old=""
+    [ -x "$new/bin/armagetronad-dedicated" ] || die "version $1 is not installed."
+    [ -e "$PREFIX/current" ] && old="$(readlink -f "$PREFIX/current")"
+    if [ "$old" = "$(readlink -f "$new")" ]; then
+        log "$(version_of "$new") is already the current version."
+        if ! service_active && [ "${3:-}" = start ]; then
+            restart_and_check "$new" || die "the server does not come up; see journalctl -u $SERVICE."
+        fi
+        return 0
+    fi
+    if ! service_active && [ "${3:-}" != start ]; then
+        point current "$new"
+        [ -n "$old" ] && point previous "$old"
+        log "now $(version_of "$new"); $SERVICE is stopped and runs it at its next start."
+        return 0
+    fi
+    service_active && warn_players "$2"
+    point current "$new"
+    if restart_and_check "$new"; then
+        [ -n "$old" ] && point previous "$old"
+        log "now running $(version_of "$new")."
+        return 0
+    fi
+    if [ -n "$old" ]; then
+        log "$1 did not come up within $HEALTH_SECONDS s; going back to $(version_of "$old")."
+        point current "$old"
+        restart_and_check "$old" || log "the old version does not come up either; see journalctl -u $SERVICE."
+    fi
+    die "$2 to $(version_of "$new") failed; see journalctl -u $SERVICE."
+}
+
+# the updater and the units from the version that now runs
+refresh_self() {
+    local src="$PREFIX/current/bin/retrocycles-server"
+    [ -r "$src" ] || return 0
+    if ! cmp -s "$src" "$SELF_PATH"; then
+        install -m 755 "$src" "$SELF_PATH.new"
+        mv -f "$SELF_PATH.new" "$SELF_PATH"
+        log "updated $SELF_PATH."
+    fi
+    "$SELF_PATH" install-service --refresh || true
+}
+
+# --- commands -------------------------------------------------------------------------------
+
+cmd_check() {
+    local quiet=0
+    [ "${1:-}" = "--at-start" ] && quiet=1
+    if [ "$UPDATE_CHECK" != on ]; then
+        [ "$quiet" = 1 ] || log "update check is off (UPDATE_CHECK in $CONF)."
+        return 0
+    fi
+    local have cache="$DATA_DIR/var/.latest-release"
+    have="$(installed_version || true)"
+    # at start, an answer from the last 10 minutes is reused: a server that keeps crashing
+    # and restarting does not ask GitHub every time
+    if [ "$quiet" = 1 ] && [ -n "$DATA_DIR" ] && [ -n "$(find "$cache" -mmin -10 2>/dev/null)" ] &&
+        RELEASE_VERSION="$(head -n 1 "$cache")" && is_release "$RELEASE_VERSION"; then
+        :
+    elif fetch_release; then
+        if [ "$quiet" = 1 ] && [ -n "$DATA_DIR" ]; then
+            { echo "$RELEASE_VERSION" > "$cache"; } 2>/dev/null || true
+        fi
+    else
+        log "could not reach the releases API to check for updates."
+        return 0
+    fi
+    if [ -z "$have" ]; then
+        log "not installed; the latest release is $RELEASE_VERSION."
+    elif is_newer "$RELEASE_VERSION" "$have"; then
+        log "a newer version $RELEASE_VERSION is available (this is $have). Update: sudo retrocycles-server update"
+    else
+        [ "$quiet" = 1 ] || log "$have is up to date."
+    fi
+}
+
+cmd_status() {
+    need_conf
+    local have prev latest="" svc players
+    have="$(installed_version || echo "none")"
+    prev="$(previous_version || echo "none")"
+    if [ "$UPDATE_CHECK" = on ] || [ "$AUTO_UPDATE" = on ]; then
+        if fetch_release; then
+            latest="$RELEASE_VERSION"
+            if is_newer "$latest" "$have"; then latest="$latest (newer: sudo retrocycles-server update)"; else latest="$latest (installed is up to date)"; fi
+        else
+            latest="unknown (could not reach the releases API)"
+        fi
+    else
+        latest="not checked (UPDATE_CHECK=off)"
+    fi
+    svc="$(systemctl is-active "$SERVICE" 2>/dev/null || true), $(systemctl is-enabled "$SERVICE" 2>/dev/null || echo "not installed")"
+    players="$(players_online)"
+    cat <<EOF
+installed:    $have  ($PREFIX/current)
+previous:     $prev
+latest:       $latest
+auto-update:  $AUTO_UPDATE
+update check: $UPDATE_CHECK
+service:      $SERVICE: $svc
+players:      $players online
+EOF
+}
+
+cmd_update() {
+    local yes=0 want="" when_empty=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --yes|-y) yes=1; shift ;;
+            --version) want="${2:-}"; [ -n "$want" ] || die "--version needs a version"; shift 2 ;;
+            --when-empty) when_empty=1; shift ;;
+            *) die "unknown option $1 (update [--yes] [--version V] [--when-empty])" ;;
+        esac
+    done
+    need_root update
+    need_conf
+    lock
+
+    local have
+    have="$(installed_version || true)"
+    fetch_release "$want" || die "could not get release ${want:-latest} from $RELEASE_API."
+    if [ -z "$want" ] && [ -n "$have" ] && ! is_newer "$RELEASE_VERSION" "$have"; then
+        log "$have is up to date."
+        return 0
+    fi
+    if [ -n "$want" ] && [ "$RELEASE_VERSION" = "$have" ]; then
+        log "$have is already installed."
+        return 0
+    fi
+    if [ "$yes" = 0 ]; then
+        [ -t 0 ] || die "update ${have:-nothing} to $RELEASE_VERSION: add --yes to confirm."
+        read -r -p "Update ${have:-(nothing installed)} to $RELEASE_VERSION? [y/N] " answer
+        [[ "$answer" =~ ^[yY] ]] || { log "nothing changed."; return 0; }
+    fi
+
+    local tarball
+    install -d -o "$SERVER_USER" -g "$(id -gn "$SERVER_USER")" "$PREFIX" "$PREFIX/versions"
+    DOWNLOAD_DIR="$(mktemp -d "$PREFIX/.download.XXXXXX")"
+    trap 'rm -rf "$DOWNLOAD_DIR"' EXIT
+    log "downloading $RELEASE_VERSION for $(arch)..."
+    tarball="$(download_verified "$DOWNLOAD_DIR")"
+    unpack "$tarball" "$RELEASE_VERSION"
+    rm -rf "$DOWNLOAD_DIR"
+    log "$RELEASE_VERSION verified and unpacked."
+
+    if [ "$when_empty" = 1 ]; then
+        local deadline players waited=0
+        deadline=$(( $(date +%s) + EMPTY_WAIT_HOURS * 3600 ))
+        while players="$(players_online)" && [ "$players" -gt 0 ]; do
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+                log "players stayed online; $RELEASE_VERSION is unpacked and goes in at the next try."
+                return 0
+            fi
+            [ "$waited" = 1 ] || log "$players player(s) online; waiting for an empty server."
+            waited=1
+            sleep "$EMPTY_POLL_SECONDS"
+        done
+    fi
+
+    switch_to "$RELEASE_VERSION" update
+    prune
+    refresh_self
+}
+
+cmd_rollback() {
+    need_root rollback
+    need_conf
+    lock
+    [ -e "$PREFIX/previous" ] || die "no previous version to go back to."
+    switch_to "$(basename "$(readlink -f "$PREFIX/previous")")" rollback
+}
+
+cmd_auto_update() {
+    need_root auto-update
+    case "${1:-}" in
+        on|off) ;;
+        *) die "usage: retrocycles-server auto-update on|off" ;;
+    esac
+    [ -w "$CONF" ] || die "$CONF is missing; run ap.sh first."
+    if grep -q '^AUTO_UPDATE=' "$CONF"; then
+        sed -i "s/^AUTO_UPDATE=.*/AUTO_UPDATE=$1/" "$CONF"
+    else
+        echo "AUTO_UPDATE=$1" >> "$CONF"
+    fi
+    if [ "$1" = on ]; then
+        log "auto-update on: once a day, while the server is empty, the latest release is installed."
+    else
+        log "auto-update off."
+    fi
+    systemctl enable --now "$SERVICE-update.timer" >/dev/null 2>&1 || true
+}
+
+# the daily timer: the update notice, then the update itself if auto-update is on
+cmd_daily() {
+    cmd_check
+    if [ "$AUTO_UPDATE" = on ]; then
+        cmd_update --yes --when-empty
+    fi
+}
+
+# writes the systemd units (used by ap.sh and after an update)
+cmd_install_service() {
+    need_root install-service
+    need_conf
+    local group svc_tmp changed=0
+    group="$(id -gn "$SERVER_USER")"
+    svc_tmp="$(mktemp -d)"
+    cat > "$svc_tmp/$SERVICE.service" <<EOF
+[Unit]
+Description=Retrocycles dedicated server
+Documentation=https://github.com/nanubula/retrocycles.io/blob/server/web/docs/HOSTING.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$SERVER_USER
+Group=$group
+WorkingDirectory=$DATA_DIR
+ExecStartPre=mkdir -p $DATA_DIR/var
+ExecStartPre=touch $DATA_DIR/var/input.txt
+# the update notice; never stops the start
+ExecStartPre=-$SELF_PATH check --at-start
+ExecStart=$PREFIX/current/bin/armagetronad-dedicated --daemon --userdatadir $DATA_DIR --vardir $DATA_DIR/var --input $DATA_DIR/var/input.txt
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    cat > "$svc_tmp/$SERVICE-update.service" <<EOF
+[Unit]
+Description=Retrocycles server update check (and auto-update when on)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$SELF_PATH daily
+EOF
+    cat > "$svc_tmp/$SERVICE-update.timer" <<EOF
+[Unit]
+Description=Daily Retrocycles server update check
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=2h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+    local f
+    for f in "$SERVICE.service" "$SERVICE-update.service" "$SERVICE-update.timer"; do
+        if ! cmp -s "$svc_tmp/$f" "$UNIT_DIR/$f"; then
+            install -m 644 "$svc_tmp/$f" "$UNIT_DIR/$f"
+            changed=1
+        fi
+    done
+    rm -rf "$svc_tmp"
+    [ "$changed" = 1 ] && systemctl daemon-reload
+    systemctl enable "$SERVICE.service" >/dev/null 2>&1
+    systemctl enable --now "$SERVICE-update.timer" >/dev/null 2>&1
+    [ "${1:-}" = --refresh ] && [ "$changed" = 1 ] && log "service units updated; they apply at the next restart."
+    return 0
+}
+
+usage() {
+    sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+case "${1:-}" in
+    status) shift; cmd_status "$@" ;;
+    check) shift; cmd_check "$@" ;;
+    update) shift; cmd_update "$@" ;;
+    rollback) shift; cmd_rollback "$@" ;;
+    auto-update) shift; cmd_auto_update "$@" ;;
+    daily) shift; cmd_daily "$@" ;;
+    install-service) shift; cmd_install_service "$@" ;;
+    switch) shift; need_root switch; need_conf; lock; switch_to "${1:?usage: switch <version dir>}" update start; prune ;;
+    -h|--help|help|"") usage ;;
+    *) usage >&2; exit 2 ;;
+esac

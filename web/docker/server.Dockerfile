@@ -1,7 +1,10 @@
 # sty+ct+ap dedicated server with the WebRTC DataChannel transport (branch server).
 # Build from the repository root:
 #   docker build -f web/docker/server.Dockerfile -t aa-server-styctap .
-# Run (UDP 4534 for desktop clients, TCP 4535 for WebRTC signalling, a UDP range for the data channels):
+# A release image is built from the release tag, which names the version:
+#   docker build --build-arg RELEASE_TAG=v0.2.9-sty+ct+ap+io.1 -f web/docker/server.Dockerfile .
+# Released images: ghcr.io/nanubula/retrocycles-server:<version> and :latest.
+# Run (web/docs/HOSTING.md has the ports and the networking notes):
 #   docker run -d --name aa -p 4534:4534/udp -p 4535:4535/tcp -p 50000-50100:50000-50100/udp \
 #       -e WEBRTC_PUBLIC_IP=<host ip> -v aa-data:/data aa-server-styctap
 ARG BASE=ubuntu:22.04
@@ -12,7 +15,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     autoconf automake libtool pkg-config bison patch bzip2 make g++ python3 git ca-certificates \
     libxml2-dev libzthread-dev libboost-dev libprotobuf-dev protobuf-compiler \
-    cmake ninja-build libssl-dev \
+    cmake ninja-build libssl-dev libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # libdatachannel, DataChannel + WebSocket only
@@ -31,18 +34,24 @@ RUN git clone --depth 1 --branch ${LDC_VERSION} --recursive \
 
 COPY . /src
 WORKDIR /src
-RUN ./bootstrap.sh && mkdir -p /build && cd /build \
+# empty: a dev build; v<major_version>.<N>: that release, which the build checks it got
+ARG RELEASE_TAG=
+# the configure flags are those of the release tarballs (web/release/build-tarball.sh)
+RUN RELEASE_TAG="${RELEASE_TAG}" ./bootstrap.sh \
+    && version="$(sed -n 's/^m4_define(AUTOMATIC_VERSION,\[\(.*\)\])$/\1/p' version.m4)" \
+    && { [ -z "${RELEASE_TAG}" ] || [ "v${version}" = "${RELEASE_TAG}" ]; } \
+    && mkdir -p /build && cd /build \
     && /src/configure --prefix=/opt/armagetronad \
         --disable-glout --enable-authentication --with-zthread \
         --disable-sysinstall --disable-useradd --disable-etc --disable-desktop --disable-uninstall \
-        --enable-webrtc --with-libdatachannel=/opt/libdatachannel \
+        --enable-webrtc --enable-platform --with-libdatachannel=/opt/libdatachannel \
     && make -j"$(nproc)" && make install
 
 ########################################
 FROM ${BASE} AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libxml2 libzthread-2.3-2 libssl3 libstdc++6 \
+    libxml2 libzthread-2.3-2 libssl3 libcurl4 ca-certificates libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /opt/libdatachannel/lib /opt/libdatachannel/lib
 COPY --from=builder /opt/armagetronad /opt/armagetronad

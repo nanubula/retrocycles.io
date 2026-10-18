@@ -1,0 +1,201 @@
+# Release of the dedicated server, from a tag v<major_version>.<N> (v0.2.9-sty+ct+ap+io.1):
+# Linux x86_64 and arm64 tarballs (web/release/build-tarball.sh), SHA256SUMS signed with
+# minisign (secret MINISIGN_SECRET_KEY, a key without password), the GitHub release, and the
+# multi-arch image ghcr.io/nanubula/retrocycles-server, tagged with the version (image tags
+# allow no +, so 0.2.9-sty-ct-ap-io.1) and latest.
+name: Server release
+
+on:
+  push:
+    tags:
+      # + is a pattern character here, hence the backslashes
+      - 'v0.2.9-sty\+ct\+ap\+io.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build, v0.2.9-sty+ct+ap+io.<N>"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-release-${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+  IMAGE: ghcr.io/${{ github.repository_owner }}/retrocycles-server
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            platform: linux/amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+
+      - name: Tarball (Ubuntu 22.04 container)
+        run: |
+          bash web/release/build-tarball.sh --out dist --ref HEAD
+          mv dist/SHA256SUMS "dist/SHA256SUMS.${{ matrix.arch }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball-${{ matrix.arch }}
+          path: dist/
+          if-no-files-found: error
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image (pushed by digest; tagged below)
+        id: image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: web/docker/server.Dockerfile
+          platforms: ${{ matrix.platform }}
+          build-args: RELEASE_TAG=${{ env.RELEASE_TAG }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.description=Retrocycles dedicated server (sty+ct+ap with browser support)
+            org.opencontainers.image.licenses=GPL-2.0-or-later
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Keep the digest
+        run: |
+          mkdir -p digests
+          digest="${{ steps.image.outputs.digest }}"
+          touch "digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: digests/*
+          if-no-files-found: error
+
+  image:
+    name: Image tags
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag the multi-arch image
+        working-directory: digests
+        run: |
+          version="${RELEASE_TAG#v}"
+          # image tags allow no +
+          tag="${version//+/-}"
+          refs=()
+          for d in *; do refs+=("$IMAGE@sha256:$d"); done
+          docker buildx imagetools create \
+            --annotation "index:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            -t "$IMAGE:$tag" -t "$IMAGE:latest" "${refs[@]}"
+          docker buildx imagetools inspect "$IMAGE:$tag"
+
+  release:
+    name: GitHub release
+    needs: [build, image]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tarball-*
+          path: dist
+          merge-multiple: true
+
+      - name: Sums and signature
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q minisign
+          cd dist
+          cat SHA256SUMS.* | sha256sum -c -
+          rm SHA256SUMS.*
+          sha256sum retrocycles-server-*.tar.gz > SHA256SUMS
+          key="$RUNNER_TEMP/minisign.key"
+          (umask 077 && printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key")
+          minisign -S -s "$key" -m SHA256SUMS -t "retrocycles-server ${RELEASE_TAG#v}"
+          rm -f "$key"
+          # the key the updater and ap.sh trust must verify it
+          public_key="$(sed -n 's/^PUBLIC_KEY="\(.*\)"$/\1/p' ../web/release/retrocycles-server)"
+          minisign -V -P "$public_key" -m SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Notes
+        run: |
+          version="${RELEASE_TAG#v}"
+          public_key="$(sed -n 's/^PUBLIC_KEY="\(.*\)"$/\1/p' web/release/retrocycles-server)"
+          src="${{ github.server_url }}/${{ github.repository }}/blob/${RELEASE_TAG//+/%2B}"
+          cat > notes.md <<EOF
+          Retrocycles dedicated server $version: sty+ct+ap with browser players (WebRTC).
+
+          **Install** (Ubuntu 22.04 / Debian 12 or newer, x86_64 or arm64):
+          \`sudo USER=<unix user> bash ap.sh\` with [web/install/ap.sh]($src/web/install/ap.sh).
+
+          **Update** an installed server: \`sudo retrocycles-server update\`.
+
+          **Docker**: \`${IMAGE}:${version//+/-}\` or \`:latest\`.
+
+          Guide: [HOSTING.md]($src/web/docs/HOSTING.md).
+
+          Check a download by hand:
+          \`\`\`
+          minisign -Vm SHA256SUMS -P $public_key
+          sha256sum -c --ignore-missing SHA256SUMS
+          \`\`\`
+          Built from the source of this tag; runtime packages: \`libxml2 libzthread-2.3-2 libssl3 libcurl4 ca-certificates\`.
+          EOF
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$RELEASE_TAG" --notes-file notes.md --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE_TAG" dist/* --verify-tag --title "Server $version" \
+              --notes-file notes.md --repo "$GITHUB_REPOSITORY"
+          fi

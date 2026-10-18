@@ -12,7 +12,37 @@ browser <======= WebRTC data channel, UDP, directly ======> your server, UDP <ga
 desktop ------------------------- UDP -------------------> your server, UDP <game port>     (as always)
 ```
 
-## 1. Build
+## 1. Install
+
+The quickest way, on Ubuntu 22.04 / Debian 12 or newer (x86_64 or arm64) with systemd:
+
+```sh
+sudo adduser --disabled-password arma          # the unix user that runs the server
+curl -fsSLO https://raw.githubusercontent.com/nanubula/retrocycles.io/server/web/install/ap.sh
+sudo AP_USER=arma bash ap.sh
+```
+
+`ap.sh` installs the latest release (a prebuilt, signed tarball; nothing is compiled) into
+`/home/arma/armagetronad`, the updater `retrocycles-server` and a systemd service
+`retrocycles-server`, writes a starter `~/.armagetronad-dedicated/var/autoexec.cfg` and starts
+the server. Its settings, logs and state live in `/home/arma/.armagetronad-dedicated`. Running
+`ap.sh` again updates. `sudo AP_USER=arma bash ap.sh --from-source` builds the source instead
+(10-20 minutes; also what it does on other architectures).
+
+The release tarballs (`retrocycles-server-<version>-linux-<arch>.tar.gz` on the GitHub
+releases page) run from any directory: `bin/armagetronad-dedicated`, with libdatachannel in
+`lib/`. They need these packages: `libxml2 libzthread-2.3-2 libssl3 libcurl4 ca-certificates`
+(on Ubuntu 24.04 and newer some end in `t64`: `libzthread-2.3-2t64 libssl3t64 libcurl4t64`).
+Each release has `SHA256SUMS` and `SHA256SUMS.minisig`; check a download by hand with
+
+```sh
+minisign -Vm SHA256SUMS -P RWSIKpeOYWO+3TDSp+ycEWZ68jvOe8vgRGz2weCXIKYNQorr43zegka+
+sha256sum -c --ignore-missing SHA256SUMS
+```
+
+The image `ghcr.io/nanubula/retrocycles-server` (section 7) is the same server for Docker.
+
+### Building it yourself
 
 You need libdatachannel (0.24 is what we test; DataChannel and WebSocket only, no media):
 
@@ -39,8 +69,13 @@ make -j"$(nproc)" && sudo make install
 `WARNING: Building WITHOUT browser support` saying why. `--enable-webrtc` makes a missing
 library an error instead; `--disable-webrtc` builds without it and says nothing.
 
-Shortcuts on this branch: `web/install/ap.sh` does all of the above for one unix user
-(its header lists the settings), and `web/docker/server.Dockerfile` builds an image with browser
+The release builds also pass `--enable-platform` (the Retrocycles moderation layer, needs
+`libcurl4-openssl-dev`; it stays off until configured, section 6). A build from a release tag
+`v0.2.9-sty+ct+ap+io.<N>` reports the version `0.2.9-sty+ct+ap+io.<N>`; any other build reports
+a dev version.
+
+Shortcuts on this branch: `web/install/ap.sh --from-source` does all of the above for one unix
+user (its header lists the settings), and `web/docker/server.Dockerfile` builds an image with browser
 support (`web/docker/server-entrypoint.sh` reads its settings). The image's entrypoint sets its own ports: signalling on
 `0.0.0.0`, ICE on the range `WEBRTC_PORT_MIN`..`MAX` (50000-50100) instead of the single port
 below, so publish that range or pass other values. The root `Dockerfile` is the upstream image
@@ -162,11 +197,79 @@ connections come from loopback (trusted, the forwarded address counts), the gate
 ## 6. Getting on the server list
 
 The Retrocycles server list shows official rooms and **trusted community servers** only; every
-other server is reachable by Direct Connect. A listed server has a named operator who signed the
-operator agreement, a server key from Retrocycles, moderation on (a build with `--enable-platform`
-and the defaults `PLATFORM_CHAT_FILTER 1`, `PLATFORM_SANCTIONS 1`, `PLATFORM_REPORTS 1`, which its
-heartbeats report) and a current version. To apply, write to <TBD contact> with your server's
-address and a contact.
+other server is reachable by Direct Connect. There is no sign-up: we may invite servers that see
+regular players. A listed server has:
+
+- moderation on: a build with `--enable-platform` (the releases have it) and the defaults
+  `PLATFORM_CHAT_FILTER 1`, `PLATFORM_SANCTIONS 1`, `PLATFORM_REPORTS 1`, which its heartbeats
+  report, with a server key from Retrocycles;
+- a current version (section 7 keeps it current);
+- a named operator who signed the operator agreement.
+
+## 7. Updating
+
+Releases are numbered `0.2.9-sty+ct+ap+io.<N>`; the server says its version at start and in the
+server browser. A server installed with `ap.sh` has the updater `retrocycles-server`:
+
+| Command | |
+|---|---|
+| `retrocycles-server status` | installed version, the latest release, auto-update on/off, the service, players online |
+| `retrocycles-server check` | whether a newer release exists |
+| `sudo retrocycles-server update` | install the latest release (`--yes` skips the question, `--version <V>` picks one) |
+| `sudo retrocycles-server rollback` | back to the version that ran before the last update |
+| `sudo retrocycles-server auto-update on` / `off` | update by itself, see below |
+
+An update downloads the tarball for your machine from the GitHub releases of
+`nanubula/retrocycles.io`, checks its signature (`SHA256SUMS.minisig`, the key above) and sum,
+and unpacks it next to the old one (`~/armagetronad/versions/<version>`; `current` points at the
+one that runs). With players online it warns them in game 30 seconds before the restart. Then
+it restarts the service and checks that the new version came up; if it does not within a minute,
+the old version is put back and restarted. Your settings and state in `~/.armagetronad-dedicated`
+are never touched. Re-running `ap.sh` does the same.
+
+**Auto-update** (off by default): `sudo retrocycles-server auto-update on`. A daily systemd timer
+(`retrocycles-server-update.timer`) then installs a newer release, but only while nobody is
+playing: it waits for an empty server for the rest of the day and tries again the next day.
+"Nobody" means no human in `var/online_players.txt`, which the server rewrites every game frame
+(bots, ping 0, do not count). Releases are never installed unsigned.
+
+**Update notice** (on by default): at every start and once a day the updater asks GitHub's
+releases API (api.github.com, nothing else) for the latest release and writes
+`a newer version ... is available` to the server log (`journalctl -u retrocycles-server`) when
+there is one. `UPDATE_CHECK=off` in `/etc/retrocycles-server.conf` turns it off. That file also
+holds `AUTO_UPDATE` and the user and paths `ap.sh` set up; it is kept when `ap.sh` runs again.
+
+The service runs the server with `--input ~/.armagetronad-dedicated/var/input.txt`: a line
+appended to that file is a console command (`echo "SAY hello" >> .../var/input.txt`), which is
+how the updater warns players.
+
+**Docker**: the image is `ghcr.io/nanubula/retrocycles-server`, tagged `latest` and with each
+version (`+` written as `-`, image tags allow no `+`: `0.2.9-sty-ct-ap-io.3`), for x86_64 and
+arm64. With Compose:
+
+```yaml
+services:
+  retrocycles:
+    image: ghcr.io/nanubula/retrocycles-server:latest
+    restart: unless-stopped
+    volumes: ["aa-data:/data"]
+    ports: ["4534:4534/udp", "4535:4535/tcp", "50000-50100:50000-50100/udp"]
+    environment:
+      WEBRTC_PUBLIC_IP: 203.0.113.7   # the host's public IPv4
+volumes:
+  aa-data:
+```
+
+Update with `docker compose pull && docker compose up -d`. To have it done automatically,
+Watchtower watches for new images and recreates the container:
+
+```sh
+docker run -d --name watchtower -v /var/run/docker.sock:/var/run/docker.sock \
+    containrrr/watchtower --schedule "0 0 6 * * *" <container name>
+```
+
+Watchtower restarts without warning players, so schedule it for a quiet hour. The update notice
+and auto-update above are for `ap.sh` installs only.
 
 ## Notes
 
