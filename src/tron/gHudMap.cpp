@@ -58,9 +58,7 @@ static void DrawRimWalls(tList<eWallRim> &list) {
 static void DrawWalls(tList<gNetPlayerWall> &list) {
 	unsigned i, len=list.Len();
 	double currentTime = se_GameTime();
-	double wallsLength = gCycle::WallsLength();
 	double wallsStayUpDelay = gCycle::WallsStayUpDelay();
-	bool limitedLength = wallsLength > 0;
 	glBegin(GL_LINES);
 	for(i=0; i<len; i++) {
 		gNetPlayerWall *wall = list[i];
@@ -73,6 +71,8 @@ static void DrawWalls(tList<gNetPlayerWall> &list) {
 		}
 		glColor4f(cycle->color_.r, cycle->color_.g, cycle->color_.b, alpha);
 		double cycleDist = cycle->GetDistance();
+		double wallsLength = cycle->BaseWallsLength();
+		bool limitedLength = wallsLength > 0;
 		double minDist = limitedLength && cycleDist > wallsLength ? cycleDist - wallsLength : 0;
 		const eCoord &begPos = wall->EndPoint(0), &endPos = wall->EndPoint(1);
 		tArray<gPlayerWallCoord> &coords = wall->Coords();

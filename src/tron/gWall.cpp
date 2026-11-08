@@ -957,7 +957,7 @@ void gNetPlayerWall::RenderList(bool list, gWallRenderMode renderMode ){
             }
 
             // cut the end of the wall
-            if ( bool(cycle_) && gCycle::WallsLength() > 0 )
+            if ( bool(cycle_) && cycle_->BaseWallsLength() > 0 )
             {
                 REAL denom = pa-pe;
                 if( denom >= 0 )
@@ -2399,7 +2399,7 @@ bool gNetPlayerWall::IsDangerousAnywhere( REAL time ) const
     }
 
     // is the wall behind the wall end?
-    if ( gCycle::WallsLength() > 0 )
+    if ( bool(cycle_) && cycle_->BaseWallsLength() > 0 )
     {
         tASSERT( cycle_->MaxWallsLength() >= cycle_->ThisWallsLength() );
         REAL maxDist = cycle_->GetDistance() - cycle_->MaxWallsLength();
@@ -2432,7 +2432,7 @@ bool gNetPlayerWall::IsDangerousApartFromHoles( REAL a, REAL time ) const
     REAL wallDistance = Pos( a );
 
     // test for finite wall length
-    if ( gCycle::WallsLength() > 0 )
+    if ( bool(cycle_) && cycle_->BaseWallsLength() > 0 )
     {
         // the distance the cycle traveled so far
         REAL cycleDistance = cycle_->GetDistance();

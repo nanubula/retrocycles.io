@@ -129,6 +129,7 @@ private:
     bool DoTrySend(nAddress const& peer, int8 const* data, int len) override;
     int DoWakeFd() const override;
     std::string DoTicket(nAddress const& peer) const override;
+    std::string DoPublicHost() const override;
     void OnDrainWakeFd() override;
 
     std::unique_ptr<rtc::WebSocketServer> signalServer_{};

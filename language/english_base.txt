@@ -4070,6 +4070,7 @@ targetzone_color_b_help   The blue portion of the target zone's color.
 
 set_cycle_speed_help      Set the current travelling speed of the owner: Usage: SET_CYCLE_SPEED <name> <speed>
 set_cycle_rubber_help     Set the current used up rubber of the owner: Usage: SET_CYCLE_RUBBER <name> <rubber>
+set_cycle_walls_length_help Set the walls length of the owner's current cycle (0 or less: endless walls; "default" goes back to CYCLE_WALLS_LENGTH). Clients older than this server version show CYCLE_WALLS_LENGTH for it. Usage: SET_CYCLE_WALLS_LENGTH <name> <length|default>
 set_cycle_braking_help    Sets whether a player is braking. Usage: SET_CYCLE_BRAKING <name> <braking>
 
 #*************************************

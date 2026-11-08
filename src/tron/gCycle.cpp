@@ -1729,9 +1729,8 @@ sg_cycleDistWallShrinkOffsetConf("CYCLE_DIST_WALL_SHRINK_OFFSET",
                                  12);
 
 // calculates the effect of driving distance to wall length
-static REAL sg_CycleWallLengthFromDist( REAL distance )
+static REAL sg_CycleWallLengthFromDist( REAL len, REAL distance )
 {
-    REAL len = gCycle::WallsLength();
     if ( len <= 0 )
     {
         return len;
@@ -1749,7 +1748,7 @@ static REAL sg_CycleWallLengthFromDist( REAL distance )
 REAL gCycle::ThisWallsLength() const
 {
     // get distance influence
-    REAL len = sg_CycleWallLengthFromDist( distance );
+    REAL len = sg_CycleWallLengthFromDist( BaseWallsLength(), distance );
     if ( len <= 0 )
     {
         return len;
@@ -1784,13 +1783,13 @@ REAL gCycle::WallEndSpeed() const
 // the maximum total length of the walls
 REAL gCycle::MaxWallsLength() const
 {
-    REAL len = sg_CycleWallLengthFromDist( distance );
+    REAL len = sg_CycleWallLengthFromDist( BaseWallsLength(), distance );
 
     // exception: if the wall grows faster than it receeds, take the maximum, because the wall will
     // grow backwards
     if ( sg_cycleDistWallShrink > 1 )
     {
-        len = wallsLength;
+        len = BaseWallsLength();
     }
 
     // if the wall grows from rubber use, add the maximal growth
@@ -1804,6 +1803,20 @@ REAL gCycle::MaxWallsLength() const
 void 	gCycle::SetWallsLength			( REAL length)
 {
     c_pwl->Set( length );
+}
+
+// this cycle's own walls length; 0 or less: endless walls
+void gCycle::SetBaseWallsLength( REAL length )
+{
+    hasWallsLength_ = true;
+    thisWallsLength_ = length;
+}
+
+// this cycle goes back to CYCLE_WALLS_LENGTH
+void gCycle::ResetBaseWallsLength()
+{
+    hasWallsLength_ = false;
+    thisWallsLength_ = 0;
 }
 
 // the radius of the holes blewn in by an explosion
@@ -5660,6 +5673,13 @@ void gCycle::WriteSync(nMessage &m){
     // write brake
     compressZeroOne.Write( m, brakingReservoir );
 
+    // this cycle's own walls length (SET_CYCLE_WALLS_LENGTH), only while it has one;
+    // clients without it in the message use CYCLE_WALLS_LENGTH, older clients ignore it
+    if ( hasWallsLength_ )
+    {
+        m << thisWallsLength_;
+    }
+
     // set new sync times
     // nextSync=tSysTimeFloat()+sg_syncIntervalEnemy;
     // nextSyncOwner=tSysTimeFloat()+sg_GetSyncIntervalSelf( this );
@@ -6043,6 +6063,15 @@ void gCycle::ReadSync( nMessage &m )
             sync.brakingReservoir = 1;
     }
 
+    // this cycle's own walls length, if the server sent one (SET_CYCLE_WALLS_LENGTH)
+    bool syncHasWallsLength = false;
+    REAL syncWallsLength = 0;
+    if ( rubberSent && !m.End() )
+    {
+        m >> syncWallsLength;
+        syncHasWallsLength = std::isfinite( syncWallsLength );
+    }
+
     // abort if sync is not new
     if ( lastSyncMessage_.time >= sync.time && lastSyncMessage_.turns >= sync.turns && sync_alive > 0 )
     {
@@ -6052,6 +6081,11 @@ void gCycle::ReadSync( nMessage &m )
         return;
     }
     lastSyncMessage_ = sync;
+
+    if ( syncHasWallsLength )
+        SetBaseWallsLength( syncWallsLength );
+    else
+        ResetBaseWallsLength();
 
     // store last known good position: a bit before the last position confirmed by the server
     lastGoodPosition_ = sync.pos + ( sync.lastTurn - sync.pos ) *.01;
@@ -7476,6 +7510,47 @@ static void sg_setCycleRubber(std::istream &s)
     }
 }
 static tConfItemFunc sg_setCycleRubberConf("SET_CYCLE_RUBBER", sg_setCycleRubber);
+
+// SET_CYCLE_WALLS_LENGTH <name> <length|default>: the walls length of one player's
+// current cycle, like CYCLE_WALLS_LENGTH (0 or less: endless walls); "default" goes
+// back to CYCLE_WALLS_LENGTH. Clients learn it from the cycle's sync messages.
+static void sg_setCycleWallsLength(std::istream &s)
+{
+    tString playerStr, lengthStr;
+    s >> playerStr;
+    s >> lengthStr;
+
+    ePlayerNetID *player = ePlayerNetID::FindPlayerByName(playerStr);
+    if ( !player )
+        return;
+
+    gCycle *pCycle = dynamic_cast<gCycle *>(player->Object());
+    if ( !pCycle || !pCycle->Alive() )
+    {
+        con << "SET_CYCLE_WALLS_LENGTH: " << playerStr << " has no living cycle.\n";
+        return;
+    }
+
+    if ( lengthStr.ToLower() == "default" )
+    {
+        pCycle->ResetBaseWallsLength();
+    }
+    else
+    {
+        char const first = lengthStr.Len() > 1 ? lengthStr[0] : '\0';
+        if ( !( ( first >= '0' && first <= '9' ) || first == '-' || first == '.' ) )
+        {
+            con << "Usage: SET_CYCLE_WALLS_LENGTH <name> <length|default>\n";
+            return;
+        }
+        REAL length = atof(lengthStr);
+        if ( !std::isfinite( length ) )
+            return;
+        pCycle->SetBaseWallsLength( length );
+    }
+    pCycle->RequestSync();
+}
+static tConfItemFunc sg_setCycleWallsLengthConf("SET_CYCLE_WALLS_LENGTH", sg_setCycleWallsLength);
 
 static void sg_setCycleBraking(std::istream &s)
 {

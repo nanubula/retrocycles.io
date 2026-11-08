@@ -1367,6 +1367,11 @@ int nTransportRtc::DoWakeFd() const
     return wakeRead_;
 }
 
+std::string nTransportRtc::DoPublicHost() const
+{
+    return std::string(static_cast<char const*>(sn_webRtcPublicIp));
+}
+
 std::string nTransportRtc::DoTicket(nAddress const& peer) const
 {
     if (!peer.IsVirtual())

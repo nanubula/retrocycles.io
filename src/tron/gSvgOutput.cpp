@@ -102,7 +102,6 @@ void SvgOutput::DrawRimWalls( std::vector<ePolyLine> &list ) {
 void SvgOutput::DrawWalls(tList<gNetPlayerWall> &list) {
     unsigned i, len=list.Len();
     double currentTime = se_GameTime();
-    bool limitedLength = gCycle::WallsLength() > 0;
     double wallsStayUpDelay = gCycle::WallsStayUpDelay();
     for(i=0; i<len; i++) {
         gNetPlayerWall *wall = list[i];
@@ -113,6 +112,7 @@ void SvgOutput::DrawWalls(tList<gNetPlayerWall> &list) {
             alpha -= 2 * (currentTime - cycle->DeathTime() - wallsStayUpDelay);
             if(alpha <= 0) continue;
         }
+        bool limitedLength = cycle->BaseWallsLength() > 0;
         double wallsLength = cycle->ThisWallsLength();
         double cycleDist = cycle->GetDistance();
         double minDist = limitedLength && cycleDist > wallsLength ? cycleDist - wallsLength : 0;

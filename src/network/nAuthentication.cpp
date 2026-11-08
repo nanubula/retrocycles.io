@@ -36,6 +36,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "nNetObject.h"
 #include "nSocket.h"
 #include "nServerInfo.h"
+#include "nTransport.h"
 #include "tDirectories.h"
 
 #include <memory>
@@ -533,6 +534,9 @@ private:
 
     //! the sender is reached through a transport (browser client), not a socket
     bool virtualPeer;
+
+    //! the transport's public host (WEBRTC_PUBLIC_IP), read with the login message
+    tString transportPublicHost;
 };
 
 
@@ -1173,6 +1177,8 @@ void nLoginProcess::ProcessClientAnswer( nMessage & m )
     // store peer address
     sn_GetAdr( m.SenderID(), peerAddress );
     virtualPeer = sn_IsVirtualPeer( m.SenderID() );
+    if ( virtualPeer )
+        transportPublicHost = nTransport::PublicHost().c_str();
 
     // and go on
     nMemberFunctionRunner::ScheduleMayBlock( *this, &nLoginProcess::Authorize, authority != "" );
@@ -1257,12 +1263,15 @@ bool nLoginProcess::CheckServerAddress()
     // a browser client (reached through a transport, not a socket) connected
     // to a signalling URL and sends its host:port; there is no UDP port to
     // match (a deployment may proxy wss through 443), so the host alone must
-    // match SERVER_DNS (as given or resolved) or our known address
+    // match SERVER_DNS (as given or resolved), our known address or WEBRTC_PUBLIC_IP.
+    // Our address is known only after a master server has told us; WEBRTC_PUBLIC_IP is
+    // the address browsers reach us at, so a server needs no SERVER_DNS for them
     if ( virtualPeer )
     {
         tString const host = sn_HostPart( serverAddress );
         if ( host.Len() > 1 && !host.StartsWith( "*" ) &&
-             ( host == sn_GetMyDNSName() || host == sn_HostPart( trueServerAddress ) || host == sn_HostPart( sn_GetMyAddress() ) ) )
+             ( host == sn_GetMyDNSName() || host == sn_HostPart( trueServerAddress ) || host == sn_HostPart( sn_GetMyAddress() ) ||
+               ( transportPublicHost.Len() > 1 && host == transportPublicHost ) ) )
         {
             return true;
         }

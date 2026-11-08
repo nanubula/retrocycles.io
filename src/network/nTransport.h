@@ -83,6 +83,10 @@ public:
     // or no transport is registered; game thread
     static std::string TicketOf(nAddress const& peer);
 
+    // the public host peers reach this server at through the transport (WEBRTC_PUBLIC_IP),
+    // empty if it is not set or no transport is registered; game thread
+    static std::string PublicHost();
+
 protected:
     nTransport();
 
@@ -94,6 +98,7 @@ private:
     virtual bool DoTrySend(nAddress const& peer, int8 const* data, int len) = 0;
     virtual int DoWakeFd() const;
     virtual std::string DoTicket(nAddress const& peer) const;
+    virtual std::string DoPublicHost() const;
     virtual void OnDrainWakeFd();
 
     // one received packet, tagged with its sender's virtual address

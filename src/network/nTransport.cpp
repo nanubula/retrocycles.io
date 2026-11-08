@@ -51,6 +51,16 @@ std::string nTransport::TicketOf(nAddress const& peer)
     return s_instance_ ? s_instance_->DoTicket(peer) : std::string();
 }
 
+std::string nTransport::DoPublicHost() const
+{
+    return std::string();
+}
+
+std::string nTransport::PublicHost()
+{
+    return s_instance_ ? s_instance_->DoPublicHost() : std::string();
+}
+
 void nTransport::Register(nTransport* transport)
 {
     tASSERT(transport);

@@ -322,6 +322,9 @@ public:
     REAL	        MaxWallsLength() const;                             //!< the maximum total length of the walls (including max effect of rubber growth)
     REAL	        ThisWallsLength() const;                            //!< the maximum total length of this cycle's wall (including rubber shrink)
     REAL	        WallEndSpeed() const;                               //!< the speed the end of the trail is receeding with right now
+    REAL	        BaseWallsLength() const { return hasWallsLength_ ? thisWallsLength_ : wallsLength; } //!< this cycle's walls length before distance and rubber effects: its own (SET_CYCLE_WALLS_LENGTH) or CYCLE_WALLS_LENGTH
+    void	        SetBaseWallsLength( REAL length );                  //!< gives this cycle its own walls length (0 or less: endless walls)
+    void	        ResetBaseWallsLength();                             //!< this cycle goes back to CYCLE_WALLS_LENGTH
     static	REAL	ExplosionRadius()	 { return explosionRadius;	}	//!< the radius of the holes blewn in by an explosion
 
     bool    IsMe( eGameObject const * other ) const;              //!< checks whether the passed pointer is logically identical with this cycle
@@ -407,6 +410,9 @@ private:
     static	REAL	wallsStayUpDelay;			//!< the time the cycle walls stay up ( negative values: they stay up forever )
     static	REAL	wallsLength;				//!< the maximum total length of the walls
     static	REAL	explosionRadius;			//!< the radius of the holes blewn in by an explosion
+
+    bool	hasWallsLength_ = false;			//!< this cycle has its own walls length
+    REAL	thisWallsLength_ = 0;				//!< that length, sent at the end of the sync message
 
 protected:
     virtual 	bool 			DoIsDestinationUsed		( const gDestination *	dest		) const		;	//!< returns whether the given destination is in active use
