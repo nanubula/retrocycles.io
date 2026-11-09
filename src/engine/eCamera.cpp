@@ -187,6 +187,8 @@ uActionCamera eCamera::se_zoomIn("ZOOM_IN",
                                  uAction::uINPUT_ANALOG);
 
 
+uActionCamera eCamera::se_glanceForward("GLANCE_FORWARD",-85);
+
 uActionCamera eCamera::se_glanceBack("GLANCE_BACK",-90);
 
 uActionCamera eCamera::se_glanceRight("GLANCE_RIGHT",-100);
@@ -213,6 +215,7 @@ uActionCamera eCamera::se_lookLeft("LOOK_LEFT",
 uActionCamera eCamera::se_switchView("SWITCH_VIEW", -160);
 
 uActionTooltip eCamera::se_glanceBackTooltip( eCamera::se_glanceBack, 1 );
+uActionTooltip eCamera::se_glanceForwardTooltip( eCamera::se_glanceForward, 1 );
 uActionTooltip eCamera::se_glanceRightTooltip( eCamera::se_glanceRight, 1 );
 uActionTooltip eCamera::se_glanceLeftTooltip( eCamera::se_glanceLeft, 1 );
 uActionTooltip eCamera::se_switchViewTooltip( eCamera::se_switchView, 1 );
@@ -269,6 +272,9 @@ static nSettingItem<REAL> s_iSGRise("CAMERA_SERVER_GLANCE_RISE", s_serverGlanceR
 static nSettingItem<REAL> s_iSGBackSpeed("CAMERA_SERVER_GLANCE_BACK_FROMSPEED", s_serverGlanceBackSpeed);
 static nSettingItem<REAL> s_iSGRiseSpeed("CAMERA_SERVER_GLANCE_RISE_FROMSPEED", s_serverGlanceRiseSpeed);
 static nSettingItem<REAL> s_iSGPitch("CAMERA_SERVER_GLANCE_PITCH", s_serverGlancePitch);
+
+static bool se_takeOverGlancing = true;
+static tSettingItem< bool > se_takeOverGlancingConf( "CAMERA_GLANCE_TAKEOVER", se_takeOverGlancing );
 
 // turn speed of internal camera
 static REAL s_inTurnSpeed=40;
@@ -405,7 +411,9 @@ void eCamera::MyInit(){
         rise=(CenterZ()-z)/dist;
     }
 
-    glancingBack=glancingLeft=glancingRight=false;
+    glancingForward=glancingBack=glancingLeft=glancingRight=false;
+    glancingLast = false;
+    returnGlanceRequest = false;
     glanceSmooth=glanceSmoothAbs=0;
 
     lastSwitch=-100;
@@ -513,11 +521,13 @@ bool eCamera::Act(uActionCamera *Act,REAL x){
     int turn=0;
     bool takeOverGlance = false;
     if (eGameObject::se_turnLeft==*reinterpret_cast<uActionPlayer *>(Act)){
-        takeOverGlance = glancingLeft || glancingBack;
+        if (se_takeOverGlancing)
+            takeOverGlance = glancingLeft || glancingBack;
         turn=-1;
     }
     if (eGameObject::se_turnRight==*reinterpret_cast<uActionPlayer *>(Act)){
-        takeOverGlance = glancingRight || glancingBack;
+        if (se_takeOverGlancing)
+            takeOverGlance = glancingRight || glancingBack;
         turn=1;
     }
 
@@ -525,7 +535,7 @@ bool eCamera::Act(uActionCamera *Act,REAL x){
     {
         // copy over position and direction, but reset glancing.
         // this will keep the camera as it was before the turn.
-        glancingRight=glancingBack=glancingLeft=false;
+        glancingForward=glancingRight=glancingBack=glancingLeft=false;
         dir = dir.Turn( glanceDir_ );
         pos = Glance( pos, glanceDir_ );
         glanceSmooth = 0;
@@ -572,6 +582,8 @@ bool eCamera::Act(uActionCamera *Act,REAL x){
         mu=-x;
     else if (se_switchView==*Act && x>0)
         SwitchView();
+    else if (se_glanceForward==*Act)
+        glancingForward=(x>0);
     else if (se_glanceBack==*Act)
         glancingBack=(x>0);
     else if (se_glanceLeft==*Act)
@@ -1464,6 +1476,16 @@ void eCamera::Render(){
 
 #endif
 
+static bool se_glanceSnap = false;
+static tSettingItem< bool > se_glanceSnapConf( "CAMERA_GLANCE_SNAP", se_glanceSnap );
+
+static bool se_glanceSnapForward = true;
+static tSettingItem< bool > se_glanceSnapForwardConf( "CAMERA_GLANCE_FORWARD_SNAP", se_glanceSnapForward );
+
+static bool se_holdGlancing = false;
+static tSettingItem< bool > se_holdGlancingConf( "CAMERA_GLANCE_HOLD", se_holdGlancing );
+
+
 void eCamera::SwitchCenter(int d){
     zNear = 0.01f;
 
@@ -1539,7 +1561,7 @@ void eCamera::Timestep(REAL ts){
         glanceSmoothAbs = abs > glanceSmoothAbs ? abs : glanceSmoothAbs;
 
         // override: go all the way when glancing back
-        if ( glancingBack )
+        if ( glancingBack || glancingForward )
         {
             glanceSmoothAbs = 1;
         }
@@ -1759,7 +1781,67 @@ void eCamera::Timestep(REAL ts){
             // fetch the relevant turning speed
             REAL turnSpeed = ( mode == CAMERA_IN || mode == CAMERA_SMART_IN ) ? s_inTurnSpeed : customTurnSpeed;
 
+            if ( 
+                ( se_glanceSnapForward && glancingForward ) ||
+                ( se_glanceSnap && ( glancingBack || glancingLeft || glancingRight ) )
+            )
+            {
+                turnSpeed += GLANCE_SPEED;
+            }
+            else if( returnGlanceRequest )
+            {
+                turnSpeed += GLANCE_SPEED;
+                if( (( dir - ( Center()->Direction() ) ).NormSquared()) < 0.01 )
+                {
+                    returnGlanceRequest = false;
+                }
+            }
+            
             eCoord cycleDir = CenterCycleDir();
+            
+            if( se_holdGlancing )
+            {
+                if( !glancingLast )
+                {
+                    if( glancingBack || glancingLeft || glancingRight || glancingForward )
+                    {
+                        // for some reason using gCycle's Direction instead of the generic
+                        // fixes occasional glance issues here
+                        glanceDirAbs = Center()->Direction();
+                        glanceDirAbs.Normalize();
+                        
+                        glancingLast = true;
+                        returnGlanceRequest = false;
+                    }
+                }
+                else
+                {
+                    if( glancingBack || glancingLeft || glancingRight || glancingForward )
+                    {
+                        cycleDir = glanceDirAbs;
+                        glanceDirLast = glanceDirAbs.Turn( glanceDir_ );
+                    }
+                    else
+                    {
+                        glancingLast = false;
+                        REAL s = (( glanceDirAbs - cycleDir ).NormSquared());
+                        // only use our own hack if the hold actually did anything
+                        if( s > 0.01 )
+                        {
+                            dir = glanceDirLast;
+                            
+                            // use our own glance return method instead of the standard one
+                            glanceSmooth = 0;
+                            returnGlanceRequest = true;
+                            glanceDirLast = cycleDir;
+                            
+                            // without this we have one frame of the camera being the wrong direction
+                            return Timestep(ts);
+                        }
+                    }
+                }
+            }
+            
             newdir=dir+cycleDir*(turnSpeed*ts);
 
             // test if we're looking against the current driving direction
@@ -1779,6 +1861,11 @@ void eCamera::Timestep(REAL ts){
                     }
                 }
                 newdir = newdir + normedLastDir*(wrongDirection*ts*turnSpeed*customTurnSpeed180);
+                
+                if ( glancingForward )
+                {
+                    newdir = cycleDir;
+                }
             }
         }
         else
@@ -1940,6 +2027,35 @@ void eCamera::Timestep(REAL ts){
                 if ( userCameraControl < .25  && se_ClampCamera(mode) )
                 {
                     bound = true;
+                    
+                    if( se_holdGlancing )
+                    {
+                        if( !glancingLast )
+                        {
+                            if( glancingBack || glancingLeft || glancingRight || glancingForward )
+                            {
+                                glanceDirAbs = Center()->Direction();
+                                glanceDirAbs.Normalize();
+                                
+                                glancingLast = true;
+                            }
+                        }
+                        else
+                        {
+                            if( glancingBack || glancingLeft || glancingRight || glancingForward )
+                            {
+                                // super hacky, probably doesn't work in all cases
+                                // glanceDir = glanceDirAbs + glanceDir - centerCycleDir
+                                eCoord c = glanceDirAbs.Turn( glanceDir_ );
+                                glanceDir_ = (CenterCycleDir().Conj()).Turn(c);
+                            }
+                            else
+                            {
+                                glancingLast = false;
+                            }
+                        }
+                    }
+                    
                     eCoord glancePos = Glance( newpos, glanceDir_ );
                     Bound( ts, glancePos );
                     newpos = Glance( glancePos, glanceDir_.Conj() );
@@ -1971,7 +2087,7 @@ void eCamera::Timestep(REAL ts){
                 // usernewrise=newrise;
 
                 // use custom camera settings when glancing
-                if ( localPlayer && !se_forbidCustomGlance && localPlayer->smartCustomGlance && ( glancingBack || glancingRight || glancingLeft || glanceSmoothAbs > .01 ))
+                if ( localPlayer && !se_forbidCustomGlance && localPlayer->smartCustomGlance && ( glancingForward || glancingBack || glancingRight || glancingLeft || glanceSmoothAbs > .01 ))
                 {
                     // calculate blending factor c. c=0 will take the smart cam position, c=1 the custom cam.
                     REAL b = 1 - glanceSmoothAbs;
@@ -1981,7 +2097,7 @@ void eCamera::Timestep(REAL ts){
                     usernewrise = newrise = newrise * ( 1-glanceSmoothAbs) + customPitch * glanceSmoothAbs;
 
                     // the other values are updated every frame, blend them softer
-                    if ( glancingBack || glancingRight || glancingLeft )
+                    if ( glancingForward || glancingBack || glancingRight || glancingLeft )
                     {
                         usernewpos  =  newpos = pos * (1-c) + (CenterPos() - CenterCamDir() * customBack) * c;
                         usernewz    = newz    = z * (1-c) + (CenterCamZ() + customRise) * c;

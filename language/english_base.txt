@@ -632,6 +632,10 @@ camera_glance_back_fromspeed_help		This value is multiplied with the current spe
 camera_glance_rise_fromspeed_help		This value is multiplied with the current speed and added to CAMERA_GLANCE_RISE.
 camera_glance_pitch_help	Position of the glance camera: how much does it look up/down?
 
+camera_glance_snap_help   Essentially ups the turn speed while glancing. Helpful for immediately glancing in a direction after turning.
+camera_glance_hold_help   Hold the glance even after turning in a different direction, like 0.4 does.
+camera_glance_takeover_help   Releases glances when you turn the same direction as glancing.
+
 camera_server_glance_back_help		Position of the server glance camera: how much is it moved back from the cycle?
 camera_server_glance_rise_help		Position of the server glance camera: how much is it moved up from the cycle?
 camera_server_glance_back_fromspeed_help		This value is multiplied with the current speed and added to CAMERA_SERVER_GLANCE_BACK.
@@ -1178,6 +1182,10 @@ input_glance_right_help		Turns the camera temporarily to the right.
 input_glance_left_tooltip   Press \1 to glance left.
 input_glance_left_text		Glance left
 input_glance_left_help		Turns the camera temporarily to the left.
+
+input_glance_forward_tooltip Press \1 to glance forward (Hold it and make turns to see how it is useful).
+input_glance_forward_text	Glance forward
+input_glance_forward_help	Turns the camera temporarily to the front.
 
 input_bank_down_text		Look down
 input_bank_down_help		Turns the camera down or moves it up if the camera direction is fixed.
