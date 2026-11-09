@@ -5,7 +5,8 @@
 
 body.is-embed:not(.is-discord) .status,
 body.is-embed:not(.is-discord) .home-menu,
-body.is-embed .docs-line { display: none; }
+body.is-embed .docs-line,
+body.is-embed .home-say { display: none; }
 
 /* A Discord Activity keeps the home screen's modes and its status cells: Quick
    Play, the Server Browser, Training; the profile (without what leaves the page: views.tsx), friends,

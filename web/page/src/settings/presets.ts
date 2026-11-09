@@ -208,3 +208,19 @@ export function presetOf<T extends { values: Record<string, string> }>(presets: 
   const same = (a: string, b: string) => (Number.isFinite(Number(a)) && Number.isFinite(Number(b)) ? Math.abs(Number(a) - Number(b)) < 1e-3 : a === b);
   return presets.find((p) => Object.entries(p.values).every(([n, v]) => same(get(n), v))) ?? null;
 }
+
+// the glance as the 0.4 client has it (eCamera.cpp): a turn snaps the view to the new side, the
+// glance stays on the side it started on through turns, and a turn toward it does not end it.
+// The camera presets leave these as they are: they are how the glance feels, not where it sits
+export const GLANCE_04: Record<string, string> = {
+  CAMERA_GLANCE_SNAP: "1",
+  CAMERA_GLANCE_HOLD: "1",
+  CAMERA_GLANCE_TAKEOVER: "0"
+};
+
+// the same settings as 0.2.9 and a fresh browser have them
+export const GLANCE_029: Record<string, string> = {
+  CAMERA_GLANCE_SNAP: "0",
+  CAMERA_GLANCE_HOLD: "0",
+  CAMERA_GLANCE_TAKEOVER: "1"
+};

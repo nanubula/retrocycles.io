@@ -187,12 +187,12 @@ function campaignOf(code: string): { source: string; medium: string } {
 }
 
 // the address GA is told: the path and the campaign alone (the address's own utm_ parameters, else
-// the ?c= code as utm_), never the rest, which can hold private codes (?duel=, ?join=, ?connect=)
+// the ?c= or ?ref= code as utm_), never the rest, which can hold private codes (?duel=, ?join=, ?connect=)
 function campaignLocation(): string {
   const params = new URLSearchParams(location.search);
   const url = new URL(location.origin + location.pathname);
   const utm = [...params].filter(([k]) => k.startsWith("utm_"));
-  const code = (params.get("c") ?? "").trim().toLowerCase();
+  const code = (params.get("c") ?? params.get("ref") ?? "").trim().toLowerCase();
   if (utm.length > 0) {
     for (const [k, v] of utm) url.searchParams.append(k, v);
   } else if (/^[a-z0-9_-]{1,32}$/.test(code)) {

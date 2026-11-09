@@ -4,6 +4,7 @@ import type { home as En } from "../../en/home";
 
 export const home = {
   "home.mode.quick": "Partie rapide",
+  "home.mode.fort": "Fortress",
   "home.mode.ranked": "Classé",
   "home.mode.browser": "Serveurs",
   "home.mode.leaderboards": "Classements",
@@ -15,7 +16,7 @@ export const home = {
 
   "home.note.noServer": "aucun serveur où se connecter : servers.json est vide",
   "home.note.notLoaded": "le client n'est pas chargé",
-  "home.note.inviteNotHere": "le salon de l'invitation n'est pas sur cette page",
+  "home.note.inviteNotHere": "Cette page ne peut pas ouvrir la partie à laquelle on t'a invité.",
   "home.note.finding": "recherche : {why}",
   "home.note.moving": "déplacement : {why}",
   "home.note.connectionLost": "connexion perdue",
@@ -58,7 +59,9 @@ export const home = {
   "home.embed.fullscreen": "Plein écran",
   "home.embed.leaveFullscreen": "Quitter le plein écran",
 
+  "home.say": "Un jeu multijoueur gratuit de motos de lumière dans le navigateur.",
   "home.docs.aria": "À propos et règles",
+  "home.docs.howToPlay": "comment jouer",
   "home.docs.about": "à propos",
   "home.docs.conduct": "conduite",
   "home.docs.privacy": "confidentialité",

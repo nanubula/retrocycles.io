@@ -23,6 +23,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
 import { DOCS, LEGAL, type LegalConfig } from "../src/legal/config.ts";
+import { attr, site } from "./social.ts";
 
 const PAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const REPO_ROOT = resolve(PAGE_ROOT, "../..");
@@ -172,13 +173,37 @@ function token(v: Values, key: string, mode: string | undefined): string {
   return v.pending.has(key) ? cell(value, "placeholder: a default awaiting a decision") : esc(value);
 }
 
-function head(doc: string): string {
+// the text of the document's own <title> and description (after <!--rc:head-->), for its share tags
+function ownTag(html: string, re: RegExp): string | null {
+  const m = re.exec(html);
+  return m ? m[1].replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&") : null;
+}
+
+// the canonical address (one URL per document: /<doc>/, the directory, which Caddy redirects
+// /<doc> to) and what a posted link to it shows
+function head(doc: string, html: string): string {
   const info = DOCS.find((d) => d.id === doc)!;
+  const url = site() + "/" + doc + "/";
+  const title = ownTag(html, /<title>([^<]*)<\/title>/);
+  const description = ownTag(html, /<meta name="description" content="([^"]*)">/);
+  const meta = (key: "name" | "property", id: string, content: string | null) =>
+    content ? `<meta ${key}="${id}" content="${attr(content)}">` : "";
   return [
     '<meta charset="utf-8">',
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     '<meta name="color-scheme" content="dark">',
     LEGAL.draft && info.legal ? '<meta name="robots" content="noindex">' : "",
+    `<link rel="canonical" href="${attr(url)}">`,
+    meta("property", "og:type", "website"),
+    meta("property", "og:site_name", "Retrocycles"),
+    meta("property", "og:title", title),
+    meta("property", "og:description", description),
+    meta("property", "og:url", url),
+    meta("property", "og:image", site() + "/share/card.jpg"),
+    meta("property", "og:image:alt", "Lightcycles racing in the Retrocycles arena"),
+    meta("name", "twitter:card", "summary_large_image"),
+    '<link rel="icon" href="/favicon.ico" sizes="any">',
+    '<link rel="icon" href="/favicon.svg" type="image/svg+xml">',
     '<link rel="stylesheet" href="/src/legal/docs.css">'
   ]
     .filter(Boolean)
@@ -218,7 +243,7 @@ function foot(doc: string, v: Values): string {
 }
 
 export function renderDoc(html: string, facts: BuildFacts): string {
-  const m = /<body[^>]*\sdata-doc="([a-z]+)"/.exec(html);
+  const m = /<body[^>]*\sdata-doc="([a-z-]+)"/.exec(html);
   if (!m) return html;
   const doc = m[1];
   if (!DOCS.some((d) => d.id === doc)) throw new Error(`legal-pages: unknown document ${doc}`);
@@ -228,7 +253,7 @@ export function renderDoc(html: string, facts: BuildFacts): string {
     return v.flags[flag] ? yes : no ?? "";
   });
   out = out
-    .replace("<!--rc:head-->", head(doc))
+    .replace("<!--rc:head-->", head(doc, html))
     .replace("<!--rc:top-->", top())
     .replace("<!--rc:draft-->", draft(doc))
     .replace("<!--rc:foot-->", foot(doc, v))

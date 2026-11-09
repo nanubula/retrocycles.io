@@ -211,6 +211,8 @@ export interface Aa {
   codeFromKeysym(keysym: number): string | null;
   // user.cfg as the game would write it now, without PASSWORD lines; the browser's autoexec lines appended
   exportConfig(): string;
+  // runs user.cfg-syntax lines through the console path and saves; the account sync passes allowlisted lines only
+  importConfig(text: string): boolean;
   console(line: string): boolean;
   setConfig(name: string, value: string): boolean;
   // every configuration value whose name starts with prefix (commands like SAY left out)

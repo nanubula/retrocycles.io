@@ -148,6 +148,29 @@ body.is-scores-game .chat { display: none; }
 .sc-chev.is-next::before { transform: rotate(-135deg); }
 .sc-chev:hover::before { border-color: var(--ink); }
 
+/* the boards side by side (DEATHMATCH FORTRESS): the window tabs' grammar a step smaller, the open
+   one ink 600 on a 2u ink rule; the pointer's alone (the game keeps the keys) */
+.sc-modes { display: inline-flex; align-items: flex-end; gap: calc(22 * var(--u)); }
+
+.sc-mode {
+  margin: 0;
+  padding: 0 0 calc(6 * var(--u));
+  border: 0;
+  border-bottom: calc(2 * var(--u)) solid transparent;
+  background: none;
+  cursor: pointer;
+  font-family: var(--font-label);
+  font-size: calc(16 * var(--u));
+  line-height: 1;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-quiet);
+  transition: color 140ms ease-out;
+}
+
+.sc-mode:hover { color: var(--ink-rest); }
+.sc-mode.is-on { color: var(--ink); font-weight: 600; border-bottom-color: var(--ink); cursor: default; }
+
 /* ---- the rows (the window and the Leaderboards page) --------------------------------------- */
 
 .bt {
@@ -203,6 +226,23 @@ body.is-scores-game .chat { display: none; }
 .bt td.bt-movecell { width: calc(64 * var(--u)); min-width: calc(64 * var(--u)); padding-left: 0; text-align: left; }
 .bt td.bt-who { width: 100%; max-width: 0; padding-left: 0; text-align: left; }
 .bt td.bt-main { color: var(--ink); font-weight: 600; font-size: calc(22 * var(--u)); }
+
+/* a board's stat columns (BoardTable's data-col; the sorted one is the main one, bt-main): each
+   at least 58u, so a short head (K/D) never pulls its figures against the next column's */
+.bt th[data-col] { width: calc(58 * var(--u)); vertical-align: bottom; }
+.bt th[data-col], .bt td[data-col] { padding-left: calc(26 * var(--u)); }
+
+.sc .bt th[data-col], .sc .bt td[data-col] { padding-left: calc(20 * var(--u)); }
+
+/* five stat columns or six (deathmatch: kills, deaths, K/D, wins, win %; the fortress board: round
+   wins, kills, deaths, K/D, match wins, win %): in the Tab window over the game the handle gives its
+   room to the name (the Leaderboards page keeps it) */
+.sc .bt[data-cols="5"] .bt-handle,
+.sc .bt[data-cols="6"] .bt-handle { display: none; }
+
+/* six (the fortress board with win %): the window drops DEATHS too (K/D says it), so the name
+   keeps its room over the game */
+.sc .bt[data-cols="6"] [data-col="deaths"] { display: none; }
 
 /* the player: the swatch, the name (it gives way first), the handle, the mark (it never does) */
 .bt-who-in { display: flex; align-items: center; min-width: 0; }
@@ -448,8 +488,25 @@ body.is-scores-game .chat { display: none; }
 .lb-context-board { font-size: calc(17 * var(--u)); font-weight: 600; color: var(--ink); }
 .lb-context-fact { font-size: calc(15 * var(--u)); color: var(--ink-quiet); }
 
-.lb-mode { font-family: var(--font-label); font-size: calc(17 * var(--u)); letter-spacing: 0.1em; text-transform: uppercase; }
+/* the boards' switch before the windows (sb-tab, servers.css), a hairline divider between them;
+   with more than three boards, MODE and its chevrons instead */
+.lb-mode-o.is-on { cursor: default; }
+.lb-mode { align-self: center; padding-bottom: calc(10 * var(--u)); font-family: var(--font-label); font-size: calc(17 * var(--u)); letter-spacing: 0.1em; text-transform: uppercase; }
 .lb-mode .sc-choice-key { color: var(--ink-quiet); }
+
+/* what the board counts, one quiet sentence over it: the Quick Play line's board or the fortress
+   rules, and in the win % sort how a match counts */
+.lb-legend {
+  grid-row: 4;
+  margin: calc(14 * var(--u)) 0 0;
+  font-family: var(--font-ui);
+  font-size: calc(15 * var(--u));
+  line-height: 1.4;
+  color: var(--ink-quiet);
+}
+
+/* the counted matches a win % is of, quiet before it */
+.lb-rows-of { margin-right: calc(14 * var(--u)); font-family: var(--font-label); font-size: calc(15 * var(--u)); letter-spacing: 0.04em; color: var(--ink-quiet); }
 
 .lb-board { overflow: hidden auto; padding: 0 calc(28 * var(--u)) 0 0; scrollbar-width: thin; scrollbar-color: var(--cell-line) transparent; }
 .lb-board .bt td { height: calc(50 * var(--u)); }
@@ -582,6 +639,29 @@ body.is-scores-game .chat { display: none; }
   .sc-sub, .sc-foot { font-size: 12px; gap: 14px; }
   .sc-seg button { font-size: 12px; }
   .bt th { font-size: 11px; padding-left: 10px; }
+  /* a two-word head (ROUND WINS, MATCH WINS) takes two lines; five or six stat columns drop
+     DEATHS, and with WIN % beside the wins K/D goes too (unless it is the sort), so the names
+     keep their room */
+  .bt th[data-col], .bt td[data-col], .sc .bt th[data-col], .sc .bt td[data-col] { padding-left: 10px; }
+  .bt th[data-col] { width: auto; }
+  .bt[data-cols="5"] th[data-col="rounds"], .bt[data-cols="5"] th[data-col="wins"],
+  .bt[data-cols="6"] th[data-col="rounds"], .bt[data-cols="6"] th[data-col="wins"] { white-space: normal; }
+  /* the sorted mark stands after the head's last line, not on a line of its own */
+  .bt th[data-col] .bt-sort { text-align: inherit; }
+  .bt th.is-sorted:has(.bt-sort)::after { content: none; }
+  .bt th.is-sorted .bt-sort { position: relative; padding-right: 8px; }
+  .bt th.is-sorted .bt-sort::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    bottom: 0.45em;
+    width: 4px;
+    height: 4px;
+    background: var(--ink-rest);
+  }
+  .bt[data-cols="5"] [data-col="deaths"],
+  .bt[data-cols="6"] [data-col="deaths"],
+  .bt:has([data-col="winpct"]):not([data-sort="kd"]) [data-col="kd"] { display: none; }
   .bt td { height: 34px; font-size: 15px; padding-left: 10px; }
   .bt td.bt-rank { width: 34px; min-width: 34px; padding-left: 6px; font-size: 13px; }
   .bt tr.is-first td.bt-rank { font-size: 15px; }
@@ -604,6 +684,15 @@ body.is-scores-game .chat { display: none; }
   /* the reset stays: one quiet fact beside the board's name */
   .lb-context .lb-context-resets { display: inline; font-size: 12px; }
   .lb-context { gap: 12px; }
+  /* YOU and TOP stay beside the title (the Server Browser's FIND takes a line of its own) */
+  .lb .sb-tools { flex: none; margin-left: auto; }
+  /* the boards' switch on a line of its own over the windows, its options 44px to the touch */
+  .lb-modes { flex: 1 1 100%; gap: 26px; border-bottom: 1px solid var(--hairline); }
+  .lb-mode-o.sb-tab { min-height: 44px; align-items: flex-end; font-size: 15px; }
+  .lb-sep { display: none; }
+  .lb-legend { margin-top: 10px; font-size: 13px; }
+  .lb-rows-of { font-size: 13px; }
+  .sc-mode { min-height: 44px; display: inline-flex; align-items: flex-end; font-size: 13px; }
   .lb-seg { margin-left: 0; }
   .lb-board { padding-right: 0; }
   .lb-board .bt td { height: 40px; }

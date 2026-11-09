@@ -47,6 +47,8 @@ interface RowBase {
   showWhen?: { name: string; value: string };
   // the game's own HUD: shown only while the HUD style is CLASSIC (the page draws those; settings/hudStyle.ts)
   classicHud?: boolean;
+  // the page's own HUD: shown only while the HUD style is MODERN (the rubber warning glow)
+  modernHud?: boolean;
 }
 
 export interface ToggleRow extends RowBase {
@@ -93,7 +95,7 @@ export interface TextRow extends RowBase {
 
 // rows that are more than one setting, or none of the game's
 export interface SpecialRow extends RowBase {
-  kind: "fps-now" | "name" | "colour" | "rig-custom" | "rig-glance" | "glance-copy" | "layout" | "touch-layout" | "camera-preset" | "hud-style" | "graphics-preset" | "fullscreen" | "shared" | "link-account" | "link-privacy" | "duels" | "duel-blocks" | "audio" | "every-setting" | "config-file" | "instant-chats" | "language";
+  kind: "fps-now" | "name" | "colour" | "rig-custom" | "rig-glance" | "glance-copy" | "glance-04" | "layout" | "touch-layout" | "camera-preset" | "hud-style" | "rubber-glow" | "graphics-preset" | "fullscreen" | "shared" | "link-account" | "link-privacy" | "duels" | "duel-blocks" | "audio" | "every-setting" | "config-file" | "instant-chats" | "language";
 }
 
 export interface KeyRow extends RowBase {
@@ -230,6 +232,7 @@ export const TAB_ROWS: Record<TabId, Tab> = {
           { kind: "keys", id: "k-glance-left", label: "settings.row.k-glance-left", action: "GLANCE_LEFT", player: 1 },
           { kind: "keys", id: "k-glance-right", label: "settings.row.k-glance-right", action: "GLANCE_RIGHT", player: 1 },
           { kind: "keys", id: "k-glance-back", label: "settings.row.k-glance-back", action: "GLANCE_BACK", player: 1 },
+          { kind: "keys", id: "k-glance-forward", label: "settings.row.k-glance-forward", action: "GLANCE_FORWARD", player: 1 },
           { kind: "keys", id: "k-zoom-in", label: "settings.row.k-zoom-in", action: "ZOOM_IN", player: 1 },
           { kind: "keys", id: "k-zoom-out", label: "settings.row.k-zoom-out", action: "ZOOM_OUT", player: 1 },
           { kind: "keys", id: "k-look-up", label: "settings.row.k-look-up", action: "BANK_UP", player: 1 },
@@ -332,7 +335,11 @@ export const TAB_ROWS: Record<TabId, Tab> = {
           { kind: "slider", id: "g-rise", label: "settings.row.g-rise", name: "CAMERA_GLANCE_RISE", def: 4, min: 0, max: 30, step: 0.25, unit: "m", words: metres, keywords: ["glance rise", "camera_glance_rise"] },
           { kind: "slider", id: "g-pitch", label: "settings.row.g-pitch", name: "CAMERA_GLANCE_PITCH", def: 30, min: -10, max: 80, step: 1, words: tiltWords, fromGame: tiltFromPitch, toGame: pitchFromTilt, keywords: ["glance pitch", "camera_glance_pitch"] },
           { kind: "glance-copy", id: "glance-copy", label: "settings.row.glance-copy" },
-          yes("smart-glance", "SMART_GLANCE_CUSTOM_1", "1")
+          // the 0.4 client's glance (eCamera.cpp): one switch for the three rows under it
+          { kind: "glance-04", id: "glance-04", label: "settings.row.glance-04", hint: "settings.row.glance-04.hint", keywords: ["0.4", "experimental", "glance hold", "glance snap", "fast glance"] },
+          yes("glance-snap", "CAMERA_GLANCE_SNAP", "0", { hint: "settings.row.glance-snap.hint", keywords: ["camera_glance_snap"] }),
+          yes("glance-hold", "CAMERA_GLANCE_HOLD", "0", { hint: "settings.row.glance-hold.hint", keywords: ["camera_glance_hold"] }),
+          yes("glance-takeover", "CAMERA_GLANCE_TAKEOVER", "1", { hint: "settings.row.glance-takeover.hint", keywords: ["camera_glance_takeover"] })
         ]
       },
       {
@@ -561,7 +568,14 @@ export const TAB_ROWS: Record<TabId, Tab> = {
     id: "hud",
     groups: [
       // MODERN (the page's meters, the default) or CLASSIC (the game's own HUD, its switches below)
-      { id: "style", rows: [{ kind: "hud-style", id: "hud-style", label: "settings.row.hud-style", hint: "settings.row.hud-style.hint", keywords: ["hud preset", "gauges", "meters", "modern", "classic", "rubber", "brake"] }] },
+      // and MODERN's rubber warning glow at the screen's edges, on unless turned off
+      {
+        id: "style",
+        rows: [
+          { kind: "hud-style", id: "hud-style", label: "settings.row.hud-style", hint: "settings.row.hud-style.hint", keywords: ["hud preset", "gauges", "meters", "modern", "classic", "rubber", "brake"] },
+          { kind: "rubber-glow", id: "rubber-glow", label: "settings.row.rubber-glow", hint: "settings.row.rubber-glow.hint", modernHud: true, keywords: ["glow", "border", "edge", "vignette", "rubber", "warning", "danger"] }
+        ]
+      },
       {
         id: "hud",
         head: "settings.group.hud",
@@ -699,7 +713,7 @@ export function actionWords(action: string): string {
 // A phone or tablet (compact.ts touchPrimary: "trim it down to things that would
 // actually be used") has no keyboard and a small screen. The sheet there keeps six tabs and these
 // rows: CONTROLS is the touch buttons' layout alone (no key bindings), nothing only a key drives (the glance, the switch-view cycle, the
-// internal camera's keys, instant chats), of the HUD tab the HUD style alone, no
+// internal camera's keys, instant chats), of the HUD tab the HUD style and its rubber warning glow, no
 // finer camera tuning than distance, height, tilt and how it follows turns, graphics down to the
 // quality tier, the render scale and the trails' look, sound down to on and its quality, and no
 // connection tuning, raw settings or config files. What is left out keeps its value (and stays on a
@@ -710,6 +724,6 @@ export const TOUCH_ROWS: ReadonlySet<string> = new Set([
   "touch-layout",
   "camera-preset", "start-cam", "fov", "rig-custom", "back", "rise", "pitch", "turn", "turn-180",
   "fps-now", "quality", "render-scale", "glass",
-  "hud-style",
+  "hud-style", "rubber-glow",
   "audio", "sound-quality"
 ]);

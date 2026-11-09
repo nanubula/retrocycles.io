@@ -62,7 +62,7 @@ export const connect = {
   "connect.fail.platformGone": "la plataforma ya no responde",
   "connect.fail.malformed": "una respuesta mal formada",
   "connect.fail.friendClosed": "ahora no puedes unirte a {name}",
-  "connect.fail.inviteClosed": "la sala de la invitación está cerrada",
+  "connect.fail.inviteClosed": "La partida a la que te invitaron ha terminado. Pulsa Partida rápida para buscar otra.",
   "connect.fail.privateEnded": "esa sala privada ha terminado",
   "connect.fail.privateBusy": "todas las salas privadas están ocupadas, inténtalo de nuevo en unos minutos",
   "connect.fail.duelEnded": "ese duelo ha terminado",
@@ -91,6 +91,7 @@ export const connect = {
   "connect.boards.detail": "Detalles del jugador",
   "connect.boards.unavailable": "Las clasificaciones necesitan la plataforma Retrocycles.",
   "connect.boards.play": "jugar",
+  "connect.boards.showing": "Tabla {name}",
 
   "connect.browser.title": "Servidores",
   "connect.browser.find": "Buscar",

@@ -33,6 +33,7 @@ GNU General Public License for more details.
 #include "gGame.h"
 #include "gScene.h"
 #include "gCycle.h"
+#include "gRouteGuide.h"
 #include "eCamera.h"
 #include "ePlayer.h"
 #include "ePlatform.h"
@@ -422,9 +423,12 @@ void gBrowserApiInit()
     se_browserChatOpenHook = &ChatOpen;
     se_browserAuthHook = &AuthRequest;
 
-    // the page follows moves: every server hears so once per connection (message 381)
+    // the page follows moves and the client shows route guides (message 383, gRouteGuide):
+    // every server hears so once per connection (message 381)
     ePlatform::SetMoveCallback( &MoveNotice );
-    ePlatform::SetClientCapabilities( tString( ePLATFORM_CAPABILITY_MOVE ) );
+    ePlatform::SetRouteGuideCallback( &gRouteGuide::OnRouteGuide );
+    std::string const capabilities = std::string( ePLATFORM_CAPABILITY_MOVE ) + " " + ePLATFORM_CAPABILITY_ROUTE;
+    ePlatform::SetClientCapabilities( tString( capabilities.c_str() ) );
 }
 
 void gBrowserApiReady()

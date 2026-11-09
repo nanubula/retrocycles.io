@@ -1,0 +1,7 @@
+/* index.html's page in words (#shell, src/styles/shell.css) with no script to run: shown at
+   once, not after the 3 s a loading app gets. Linked from a <noscript> in the head; a file, not
+   inline, for the Content-Security-Policy. */
+#shell.shell {
+  opacity: 1;
+  animation: none;
+}

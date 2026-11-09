@@ -84,7 +84,33 @@ const listeners = new Set<() => void>();
 
 function publish(next: PlatformState) {
   current = next;
+  if (next.mode === "platform") keepInviteCode(next.user);
   for (const listener of listeners) listener();
+}
+
+// the signed-in player's invite code (GET /v1/me inviteCode): their INVITE link carries it as ?l=,
+// so a visit it brings counts for them. Kept per user; a guest's sign-in answer has none, so it
+// comes from /v1/me once a network game needs the link
+let invite: { user: string; code: string } | null = null;
+let inviteAsked: string | null = null;
+
+function keepInviteCode(user: PlatformUser | null | undefined) {
+  if (user?.inviteCode && /^[a-z0-9_-]{1,32}$/.test(user.inviteCode)) invite = { user: user.id, code: user.inviteCode };
+}
+
+// the code of the player signed in now, asking the platform once per player; null without one
+export async function myInviteCode(): Promise<string | null> {
+  if (current.mode !== "platform" || !current.user) return null;
+  const id = current.user.id;
+  if (invite?.user === id) return invite.code;
+  if (inviteAsked === id) return null;
+  inviteAsked = id;
+  try {
+    keepInviteCode(await getMe(current.apiUrl));
+  } catch (e) {
+    console.info("platform: no invite code (" + String(e instanceof Error ? e.message : e) + ")");
+  }
+  return invite?.user === id ? invite.code : null;
 }
 
 export function platformState(): PlatformState {
@@ -101,6 +127,7 @@ export function subscribePlatform(listener: () => void): () => void {
 // the signed-in user changed (sign-in, sign-up, sign-out, New player, a refresh)
 export function setPlatformUser(user: PlatformUser | null) {
   if (current.mode !== "platform") return;
+  keepInviteCode(user);
   const was = current.user;
   if (was === user || (was && user && was.id === user.id && was.gid === user.gid && was.name === user.name && was.isGuest === user.isGuest)) return;
   publish({ ...current, user });

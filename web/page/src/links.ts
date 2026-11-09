@@ -57,12 +57,12 @@ function dropParams(drop: (name: string) => boolean): boolean {
 // `embed` in the campaign (src/discord.ts openOutside opens it). `out`: the site serves that
 // tab without cross-origin isolation (the platform's Caddyfile), since X's sandboxed frame
 // opens it sandboxed too, where Chrome refuses a COOP page (an error page instead)
-// takes the campaign codes (?c=, a creator link's ?l=, utm_*) off the address bar once the usage
+// takes the campaign codes (?c=, ?ref=, a creator link's ?l=, utm_*) off the address bar once the usage
 // events and GA have read them (main.tsx). The other parameters keep their own spelling (`out`, not
 // `out=`); a page in a frame (the embed, Discord) has no address bar to tidy
 export function dropCampaignCodes() {
   if (EMBED) return;
-  dropParams((name) => name === "c" || name === "l" || name.startsWith("utm_"));
+  dropParams((name) => name === "c" || name === "ref" || name === "l" || name.startsWith("utm_"));
 }
 
 export function fullPageLink(from: "embed" | "embed-menu" | "embed-dead" | "embed-profile" = "embed"): string {

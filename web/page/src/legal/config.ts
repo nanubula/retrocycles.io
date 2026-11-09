@@ -94,6 +94,9 @@ export interface DocInfo {
 }
 
 export const ALL_DOCS: DocInfo[] = [
+  // the guides: how the game plays, for players and for search
+  { id: "how-to-play", title: "How to play", legal: false },
+  { id: "play-with-friends", title: "Play with friends", legal: false },
   { id: "about", title: "About", legal: false },
   { id: "conduct", title: "Code of conduct", legal: false },
   { id: "privacy", title: "Privacy", legal: true },

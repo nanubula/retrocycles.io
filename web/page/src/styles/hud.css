@@ -1,6 +1,7 @@
 /* The page's HUD (components/CycleHud.tsx; the HUD style MODERN, on every device): the rail at the
    foot of the screen, between where the thumbs and their turn buttons go, and the danger edge
-   round the screen. Sizes in px, a step larger outside the compact view (a desktop window).
+   round the screen (a player can turn the edge off: Settings > HUD, settings/hudStyle.ts).
+   Sizes in px, a step larger outside the compact view (a desktop window).
    Rubber's colours are the state colours' hues: the cells show
    what is left, green while there is plenty, amber from half, red near the end (a
    blend where the browser has color-mix); the ten cells and the figure carry the same news for

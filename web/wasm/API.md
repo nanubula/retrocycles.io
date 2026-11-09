@@ -556,6 +556,17 @@ map, `PLAYER_1`, `COLOR_*_1`, camera and video settings ...), pasted into anothe
 page's import. Password hashes (`PASSWORD` lines, `PASSWORD_STORAGE 1`) are left out
 of the export on purpose.
 
+**Account sync (page, not the engine).** A signed-in, registered player's settings follow the account:
+the page reads the account's text once per sign-in (`GET /v1/me/config`, platform-contract) and, if it is
+newer than the version this browser last synced for the account (or another account's settings were here last), applies it with `importConfig(text)`; after a change it
+takes `exportConfig()`, keeps the allowlisted lines (player 1's colour, `KEYBOARD` bindings, the HUD,
+chat and team preferences) and sends them about 5 s after the last change and when the tab is hidden. The
+page passes only allowlisted lines to `importConfig`, so an edited text cannot run console commands, and
+`PASSWORD` lines are never sent (the platform refuses them too). Never synced: logins (`USER_n`,
+`AUTO_LOGIN_n`, `PASSWORD*`), `PLAYER_1`, the camera, `sg_browserSettingNames` (`SCENE_*`, `BROWSER_*`,
+`TRAIL_GLASS`), graphics, display and sound. Guests (the platform answers them `403`) and signed-out players stay local. Nothing in the
+engine changes for this.
+
 Settings that are not part of `user.cfg` (`savable: false` in `getConfig`: the
 `settings_*.cfg` values, `tSettingItem`) would be lost on reload; natively the user puts
 them into `var/autoexec.cfg` by hand. The browser client writes that file itself on
@@ -832,6 +843,10 @@ for a LAN/loopback setup); otherwise every browser login fails with `Server addr
 mismatch`. A local test server can use `LOCAL_USER tester secret`,
 `ACCESS_LEVEL_PLAY 15`, `SERVER_DNS 127.0.0.1`.
 
+Through the Direct Connect gateway (`/v1/direct/signal?to=host:port`) the client sends the address in `to`, not the
+gateway's: a server reached by its IP address passes the check without `SERVER_DNS`; one reached by a name needs
+`SERVER_DNS` set to that name.
+
 ## ICE servers (STUN/TURN; the relay for networks without UDP)
 
 By default the browser connects with host candidates only: it needs outbound UDP to the
@@ -947,8 +962,9 @@ A platform room can send a group of players to another room (rooms merged, a ser
 emptied, a closer server; `platform-contract/README.md` section 3, "Moving players"). The
 classic redirect (`login_deny` with a `host:port`) does not work here, a `host:port` is no
 signalling URL, so the browser client announces itself instead: once per connection, right
-after the login, it sends network message 381 (`platform_client_caps`) with the word `move`
-(servers that do not know the message ignore it). A room with a move for this player then
+after the login, it sends network message 381 (`platform_client_caps`) with the words `move route`
+(servers that do not know the message ignore it; `route` asks for the route guide, message 383,
+`src/tron/gRouteGuide.h`, which the client draws on its own and the page never sees). A room with a move for this player then
 sends message 382 (`platform_move`) and the client raises the `move` event with the target.
 Nothing else happens on its own: the session goes on until the page ends it. The room waits
 about 10 s, then disconnects a client that is still there (reason `Moved to <name>.`).

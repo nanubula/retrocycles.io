@@ -66,6 +66,8 @@ interface CallOptions {
   csrf?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal; // the caller's own way to end it (as a timeout)
+  headers?: Record<string, string>; // more request headers (If-Match)
+  keepalive?: boolean; // the request outlives the page (a save at pagehide; the body must stay under 64 KB)
 }
 
 async function problemOf(response: Response): Promise<{ code: string | null; errors: Record<string, string[]>; title: string; retryAfter: number | null; raw: Record<string, unknown> }> {
@@ -115,12 +117,14 @@ async function call<T>(apiUrl: string, method: Method, path: string, options: Ca
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
   if (options.csrf) headers["X-RC-CSRF"] = "1";
   if (bearer) headers["Authorization"] = "Bearer " + bearer;
+  Object.assign(headers, options.headers);
   let response: Response;
   try {
     response = await fetch(apiUrl + path, {
       method,
       credentials: "include",
       cache: "no-store",
+      keepalive: options.keepalive,
       headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
       signal: abort.signal
@@ -231,6 +235,8 @@ export function getRegions(apiUrl: string): Promise<RegionsResponse> {
 // `avoid`: server ids this page just failed to reach; any other room (not for an invite or friend)
 // `webSocket`: WebRTC does not get through from this page (webrtcFallback.ts): only rooms that
 // take the game over their signalling WebSocket, an invite's or friend's too
+// `mode`: a Quick Play mode other than the default ("qp-fort"): a room of that mode (not for an
+// invite, a friend or a move, which name their room)
 export function quickPlay(
   apiUrl: string,
   region: string | null,
@@ -240,16 +246,18 @@ export function quickPlay(
   friend?: string | null,
   discordInstance?: string | null,
   avoid?: string[],
-  webSocket?: boolean
+  webSocket?: boolean,
+  mode?: string | null
 ): Promise<QuickPlayAnswer> {
-  const body: { region?: string; latencies?: Record<string, number>; moveId?: string; room?: string; friend?: string; discordInstance?: string; avoid?: string[]; webSocket?: boolean } = {};
+  const body: { region?: string; latencies?: Record<string, number>; moveId?: string; room?: string; friend?: string; discordInstance?: string; avoid?: string[]; webSocket?: boolean; mode?: string } = {};
   if (friend) body.friend = friend;
   else if (room) body.room = room;
   else if (region) body.region = region;
   if (latencies && Object.keys(latencies).length) body.latencies = latencies;
   if (moveId) body.moveId = moveId;
-  // a Discord Activity's launch: the platform keeps everyone in it in one room
-  if (discordInstance && !moveId && !friend && !room) body.discordInstance = discordInstance;
+  if (mode && !moveId && !friend && !room) body.mode = mode;
+  // a Discord Activity's launch: the platform keeps everyone in it in one room (a chosen mode goes its own way)
+  if (discordInstance && !moveId && !friend && !room && !body.mode) body.discordInstance = discordInstance;
   if (avoid && avoid.length && !friend && !room) body.avoid = avoid.slice(-8);
   if (webSocket && !body.discordInstance) body.webSocket = true;
   return call<QuickPlayAnswer>(apiUrl, "POST", "/v1/quickplay", { body, csrf: true });
@@ -658,4 +666,44 @@ export interface DiscordActivitySession {
 // Discord user: their account, made the first time
 export function discordActivitySignIn(apiUrl: string, code: string, codeVerifier: string, page?: string): Promise<DiscordActivitySession> {
   return call<DiscordActivitySession>(apiUrl, "POST", "/v1/auth/discord-activity" + pageQuery(page), { body: codeVerifier ? { code, codeVerifier } : { code }, csrf: true, timeoutMs: 15000 });
+}
+
+// ---- the account's saved settings (contract "Saved settings"; settings/configSync.ts drives it) ----
+
+export type ConfigRead = { status: "ok"; text: string; version: number } | { status: "forbidden" };
+export type ConfigWrite = { status: "ok"; version: number } | { status: "conflict"; version: number } | { status: "forbidden" };
+
+// version 0 and empty text: nothing saved yet. 403: a guest has no saved settings
+export async function getMyConfig(apiUrl: string): Promise<ConfigRead> {
+  try {
+    const answer = await call<{ text?: unknown; version?: unknown }>(apiUrl, "GET", "/v1/me/config", { timeoutMs: 8000 });
+    const version = Number(answer?.version);
+    if (typeof answer?.text !== "string" || !Number.isSafeInteger(version) || version < 0) throw new PlatformError("GET /v1/me/config: bad answer", 0);
+    return { status: "ok", text: answer.text, version };
+  } catch (e) {
+    if (e instanceof PlatformError && e.status === 403) return { status: "forbidden" };
+    throw e;
+  }
+}
+
+// replaces the version named (0: none saved yet). 409: the account has another version (its number is in the answer)
+export async function putMyConfig(apiUrl: string, text: string, version: number, keepalive = false): Promise<ConfigWrite> {
+  try {
+    const answer = await call<{ version?: unknown }>(apiUrl, "PUT", "/v1/me/config", {
+      body: { text },
+      csrf: true,
+      timeoutMs: 8000,
+      headers: { "If-Match": '"' + version + '"' },
+      keepalive
+    });
+    const next = Number(answer?.version);
+    return { status: "ok", version: Number.isSafeInteger(next) ? next : version + 1 };
+  } catch (e) {
+    if (e instanceof PlatformError && e.status === 403) return { status: "forbidden" };
+    if (e instanceof PlatformError && e.status === 409) {
+      const current = Number(e.problem.version);
+      return { status: "conflict", version: Number.isSafeInteger(current) && current >= 0 ? current : -1 };
+    }
+    throw e;
+  }
 }

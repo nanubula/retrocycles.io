@@ -56,7 +56,7 @@ TRON_SOURCES := \
 	gAIBase.cpp gAICharacter.cpp gArena.cpp gCamera.cpp gCycle.cpp \
 	gCycleMovement.cpp gExplosion.cpp gGame.cpp gHud.cpp gLanguageMenu.cpp \
 	gLogo.cpp gMenus.cpp gParser.cpp gParticles.cpp gSensor.cpp gServerBrowser.cpp \
-	gSparks.cpp gSpawn.cpp gStuff.cpp gTeam.cpp gWall.cpp gWinZone.cpp \
+	gSparks.cpp gSpawn.cpp gStuff.cpp gTeam.cpp gWall.cpp gWinZone.cpp gRouteGuide.cpp \
 	gFriends.cpp gServerFavorites.cpp \
 	gFloor.cpp gArmagetron.cpp gBrowser.cpp gBrowserApi.cpp gBrowserQuality.cpp gScene.cpp \
 	gStadium.cpp \

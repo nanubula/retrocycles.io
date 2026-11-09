@@ -173,9 +173,11 @@ function browserFamily(): "chrome" | "firefox" | "safari" | "edge" | "other" {
   return "other";
 }
 
-// the campaign code of `?c=` when it is one (the contract's pattern), else nothing
+// the campaign code of `?c=`, else of `?ref=` (the tag a directory's own link carries), when it is one
+// (the contract's pattern), else nothing
 function campaign(): string | undefined {
-  const c = new URLSearchParams(location.search).get("c");
+  const query = new URLSearchParams(location.search);
+  const c = query.get("c") ?? query.get("ref");
   const code = c ? c.trim().toLowerCase() : "";
   return /^[a-z0-9_-]{1,32}$/.test(code) ? code : undefined;
 }
@@ -186,16 +188,29 @@ function link(): string | undefined {
   return campaign() && /^[a-z0-9_-]{1,32}$/.test(l) ? l : undefined;
 }
 
-// the link's utm_source / utm_medium / utm_campaign (a post, an ad, a newsletter), lower case with
-// blanks as "-", each only when it is then a plain code (the contract's pattern): an address, a
-// path or anything else stays out
-function utm(): { utmSource?: string; utmMedium?: string; utmCampaign?: string } {
+// the link's utm_source / utm_medium / utm_campaign (a post, an ad, a newsletter) and utm_content /
+// utm_term (which post or creative, a search keyword), lower case with blanks as "-", each only when
+// it is then a plain code (the contract's pattern): an address, a path or anything else stays out
+function utm(): { utmSource?: string; utmMedium?: string; utmCampaign?: string; utmContent?: string; utmTerm?: string } {
   const query = new URLSearchParams(location.search);
   const code = (name: string) => {
     const v = (query.get(name) ?? "").trim().toLowerCase().replace(/\s+/g, "-");
     return /^[a-z0-9][a-z0-9._-]{0,63}$/.test(v) ? v : undefined;
   };
-  return { utmSource: code("utm_source"), utmMedium: code("utm_medium"), utmCampaign: code("utm_campaign") };
+  return {
+    utmSource: code("utm_source"),
+    utmMedium: code("utm_medium"),
+    utmCampaign: code("utm_campaign"),
+    utmContent: code("utm_content"),
+    utmTerm: code("utm_term")
+  };
+}
+
+// the path the page loaded at (/, /play/, /2/): the landing page, lower case, only when it is a
+// plain path (the contract's pattern); never the query or the fragment
+function landingPath(): string | undefined {
+  const path = location.pathname.toLowerCase();
+  return /^(?!.*(\.\.|\/\/))\/[a-z0-9/._-]{0,63}$/.test(path) ? path : undefined;
 }
 
 // the referring site's origin, only when it is another site
@@ -398,7 +413,7 @@ export function startAnalytics() {
   debug = asked === "debug";
   const gpc = (navigator as Navigator & { globalPrivacyControl?: boolean }).globalPrivacyControl === true;
   // embed: the page in a social post's frame (links.ts), so the platform can tell the X embed from the page itself
-  const view: Props = { campaign: campaign(), link: link(), referrer: referrer(), ...utm(), device: deviceClass(), browser: browserFamily(), ...(DISCORD ? { discord: true } : EMBED ? { embed: true } : {}) };
+  const view: Props = { campaign: campaign(), link: link(), referrer: referrer(), ...utm(), path: landingPath(), device: deviceClass(), browser: browserFamily(), ...(DISCORD ? { discord: true } : EMBED ? { embed: true } : {}) };
   // the platform's copy of this load: its first call carries the page session and the
   // page_view, so a load whose events never arrive (a blocker, Global Privacy Control, the cookie
   // question not accepted) still counts. Not for test runs, nor in debug (logged instead)

@@ -11,6 +11,7 @@ import { noteEmbedSound } from "../embedSound";
 import { noteArena } from "../arenaTest";
 import { noteLookSetting } from "./classicLook";
 import { noteFrameRateSetting } from "./hudStyle";
+import { noteSettingsChanged } from "./changed";
 
 const SAVE_AFTER_MS = 1000;
 
@@ -101,6 +102,7 @@ export function useSettingsStore(aa: Aa | null, onSaved?: () => void): SettingsS
     try {
       aa.saveConfig();
       onSaved?.();
+      noteSettingsChanged();
     } catch (e) {
       console.info("settings: not saved: " + String(e));
     }
@@ -215,6 +217,7 @@ export function useSettingsStore(aa: Aa | null, onSaved?: () => void): SettingsS
         memo.current.set(key, value);
         writePage(key, value);
         setVersion((v) => v + 1);
+        noteSettingsChanged();
       },
       touch() {
         setVersion((v) => v + 1);

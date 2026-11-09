@@ -3,6 +3,7 @@ import { App } from "./App";
 import { startAnalytics, watchErrors } from "./platform/analytics";
 import { startGoogleTag } from "./googleTag";
 import "./styles/page.css";
+import "./styles/shell.css";
 import "./styles/first-minute.css";
 import "./styles/chat.css";
 import "./styles/profile.css";
@@ -51,7 +52,7 @@ function start() {
   watchErrors(document.getElementById("canvas") as HTMLCanvasElement | null);
   // Google Analytics, when the platform names a tag (consent first where the law wants it)
   startGoogleTag();
-  // both have read the link's codes (?c=, utm_): off the address, so it reads as the site's own
+  // both have read the link's codes (?c=, ?ref=, utm_): off the address, so it reads as the site's own
   // and a copied or bookmarked link does not count the campaign again
   dropCampaignCodes();
 
@@ -66,12 +67,19 @@ function start() {
     else posterImage.addEventListener("load", show, { once: true });
   }
 
+  // index.html's page in words stays out of sight while the app starts (src/styles/shell.css), so
+  // a slow load never shows it and then swaps it for the home screen; back if the start fails
+  const shell = document.getElementById("shell");
+  shell?.classList.add("is-app");
+
   // no StrictMode: its double-invoked effects would load the wasm runtime twice. The player's
   // language first (i18n/index.ts: English at once, another its own small chunk)
-  void initLang().then(() => createRoot(document.getElementById("root")!).render(<App />));
+  void initLang()
+    .then(() => createRoot(document.getElementById("root")!).render(<App />))
+    .catch(() => shell?.classList.remove("is-app"));
 }
 
-// index.html's <title> ("Retrocycles") back whenever something else writes one
+// index.html's <title> back whenever something else writes one
 // (the page's own changes, an opponent's arrival flashing it, go through wantedTitle(): alerts.ts)
 function keepTitle() {
   const restore = () => {

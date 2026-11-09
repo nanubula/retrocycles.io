@@ -674,7 +674,7 @@ export const Friends = forwardRef<FriendsHandle, FriendsProps>(function Friends(
           </p>
         </div>
         {account && (
-          <button className={"sheet-x fr-add-cell" + (view === "add" ? " is-on" : "")} id="friends-add-open" type="button" tabIndex={-1} aria-pressed={view === "add"} title={t("social.friends.addTitle")} onClick={() => (view === "add" ? go(tab) : go("add"))}>
+          <button className={"sheet-x fr-add-cell" + (view === "add" ? " is-on" : "")} id="friends-add-open" type="button" aria-pressed={view === "add"} title={t("social.friends.addTitle")} onClick={() => (view === "add" ? go(tab) : go("add"))}>
             <Icon name="plus" className="sheet-x-icon" />
             {t("social.friends.add")}
           </button>

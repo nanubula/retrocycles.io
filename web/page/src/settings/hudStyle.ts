@@ -8,6 +8,10 @@
 // And the frame rate counter (`rc.showFps`, "1" when on; off by default): a saved user.cfg
 // cannot be relied on to keep it, so the page sets SHOW_FPS from this on every load (applyFrameRate) and the
 // GRAPHICS row's switch writes it here too (noteFrameRateSetting, from the Settings store).
+//
+// And MODERN's rubber warning glow, the screen's edges warming as rubber runs out (CycleHud.tsx):
+// on by default; a switch under the HUD style turns it off for players who find it distracting
+// (`rc.rubberGlow`: "off", or nothing for on). The rail's cells and colours stay.
 import { useSyncExternalStore } from "react";
 import type { Aa } from "../aa/types";
 
@@ -15,6 +19,7 @@ export type HudStyle = "modern" | "classic";
 
 const KEY = "rc.hudStyle";
 const FPS_KEY = "rc.showFps";
+const GLOW_KEY = "rc.rubberGlow";
 
 // CLASSIC's readouts, set once when it is picked; the HUD tab's switches change them from there
 export const CLASSIC_HUD_VALUES: Record<string, string> = {
@@ -67,6 +72,33 @@ export function useHudStyle(): HudStyle {
     },
     hudStyle,
     hudStyle
+  );
+}
+
+// ---- the rubber warning glow -----------------------------------------------------------------
+
+let glow = read(GLOW_KEY) !== "off";
+const glowListeners = new Set<() => void>();
+
+export function rubberGlow(): boolean {
+  return glow;
+}
+
+export function setRubberGlow(on: boolean): void {
+  if (on === glow) return;
+  glow = on;
+  write(GLOW_KEY, on ? null : "off");
+  for (const fn of glowListeners) fn();
+}
+
+export function useRubberGlow(): boolean {
+  return useSyncExternalStore(
+    (fn) => {
+      glowListeners.add(fn);
+      return () => glowListeners.delete(fn);
+    },
+    rubberGlow,
+    rubberGlow
   );
 }
 

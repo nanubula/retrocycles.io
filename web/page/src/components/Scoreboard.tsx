@@ -7,12 +7,13 @@
 // MATCH: the room's players by score, split by team when a team has more than one player: score,
 // deaths (the platform's tally of the room's match, for official rooms), ping; a player waiting to
 // respawn is faded, as the game's Alive column said. TODAY, THIS WEEK, ALL TIME (features.leaderboards):
-// the board of the room's kind of game, opened on the player's own place.
+// the board of the room's kind of game (App: the room's board), in that board's own columns,
+// opened on the player's own place.
 import { useMemo } from "react";
 import type { AaPlayer } from "../aa/types";
-import type { BoardSort, BoardWindow } from "../platform/types";
-import { useBoard, type TallyLine } from "../platform/leaderboards";
-import { BoardTable } from "./BoardTable";
+import type { BoardInfo, BoardSort, BoardWindow } from "../platform/types";
+import { boardColumns, boardSorts, useBoard, type TallyLine } from "../platform/leaderboards";
+import { BoardTable, ModeSwitch, qualifyWords } from "./BoardTable";
 import { KeyCap } from "./KeyCaps";
 import { num, t, type PlainKey } from "../i18n";
 
@@ -45,7 +46,7 @@ interface ScoreboardProps {
   roomName: string;
   // a server that is not ours: nobody there signed in through Retrocycles, so the names are unverified
   unverified?: boolean;
-  boards: { id: string; name: string }[]; // empty: MATCH only
+  boards: BoardInfo[]; // empty: MATCH only
   board: string | null;
   onBoard(id: string): void;
   sort: BoardSort;
@@ -184,25 +185,14 @@ function BoardView({ boards, board, onBoard, sort, onSort, onSave, youColor, win
   const page = live.page;
   const failed = live.failed;
   const current = boards.find((b) => b.id === board) ?? boards[0];
-  const step = (by: number) => {
-    const i = boards.findIndex((b) => b.id === current.id);
-    onBoard(boards[(i + by + boards.length) % boards.length].id);
-  };
+  const columns = boardColumns(boardSorts(current));
+  const qualify = page && !page.me ? qualifyWords(page, sort) : null;
   return (
     <>
       <div className="sc-sub">
-        {boards.length > 1 ? (
-          <span className="sc-choice">
-            <span className="sc-choice-key">{t("game.score.mode")}</span>
-            <button type="button" className="sc-chev" tabIndex={-1} aria-label={t("game.score.modePrev")} onMouseDown={keepFocus} onClick={() => step(-1)} />
-            <span className="sc-choice-value">{current.name}</span>
-            <button type="button" className="sc-chev is-next" tabIndex={-1} aria-label={t("game.score.modeNext")} onMouseDown={keepFocus} onClick={() => step(1)} />
-          </span>
-        ) : (
-          <span className="sc-room">{current?.name}</span>
-        )}
+        {boards.length > 1 ? <ModeSwitch boards={boards} board={current.id} onPick={onBoard} overGame /> : <span className="sc-room">{current?.name}</span>}
       </div>
-      {page && page.rows.length > 0 && <BoardTable page={page} label={t("game.score.label")} youColor={youColor} onSort={onSort} />}
+      {page && page.rows.length > 0 && <BoardTable page={page} columns={columns} label={t("game.score.label")} youColor={youColor} onSort={onSort} />}
       {page && !page.rows.length && <p className="sc-empty">{t("game.score.empty")}</p>}
       {!page && failed && <p className="sc-empty">{t("game.score.offline")}</p>}
       {page && page.me && !page.me.saved && (
@@ -212,9 +202,7 @@ function BoardView({ boards, board, onBoard, sort, onSort, onSave, youColor, win
           </button>
         </div>
       )}
-      {page && !page.me && page.killsToQualify !== null && (
-        <p className="sc-note">{t(sort === "kd" ? "game.score.qualifyKd" : "game.score.qualify", { n: page.killsToQualify })}</p>
-      )}
+      {qualify && <p className="sc-note">{qualify}</p>}
     </>
   );
 }

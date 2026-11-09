@@ -46,6 +46,7 @@ GNU General Public License for more details.
 #include "tLocale.h"
 #include "tSysTime.h"
 
+#include <cctype>
 #include <emscripten.h>
 
 #include <cstdio>
@@ -115,10 +116,52 @@ std::string BrowserHost( std::string const & url )
     return rest;
 }
 
+//! a URL query value with its %XX bytes decoded
+static std::string BrowserPercentDecode( std::string const & text )
+{
+    static std::string const hex = "0123456789abcdef";
+    std::string out;
+    for ( size_t i = 0; i < text.size(); ++i )
+    {
+        if ( text[i] == '%' && i + 2 < text.size() )
+        {
+            size_t const high = hex.find( static_cast< char >( tolower( text[i + 1] ) ) );
+            size_t const low = hex.find( static_cast< char >( tolower( text[i + 2] ) ) );
+            if ( high != std::string::npos && low != std::string::npos )
+            {
+                out += static_cast< char >( high * 16 + low );
+                i += 2;
+                continue;
+            }
+        }
+        out += text[i];
+    }
+    return out;
+}
+
 //! "host:port" of a ws(s):// URL, the port from the URL or the scheme's
-//! default: what the login's pharming check compares with SERVER_DNS
+//! default: what the login's pharming check compares with SERVER_DNS. Through
+//! the Direct Connect gateway it is the server the gateway leads to, named by
+//! the URL's `to`, not the gateway: the server knows only its own address
 std::string BrowserHostAndPort( std::string const & url )
 {
+    static std::string const gateway = "/v1/direct/signal?";
+    size_t const through = url.find( gateway );
+    if ( through != std::string::npos )
+    {
+        std::string query = "&" + url.substr( through + gateway.size() );
+        size_t const fragment = query.find( '#' );
+        if ( fragment != std::string::npos )
+            query = query.substr( 0, fragment );
+        size_t const to = query.find( "&to=" );
+        if ( to != std::string::npos )
+        {
+            std::string const value = BrowserPercentDecode( query.substr( to + 4, query.find( '&', to + 4 ) - ( to + 4 ) ) );
+            if ( !value.empty() )
+                return BrowserHostAndPort( "ws://" + value );
+        }
+    }
+
     std::string rest = url;
     std::string port = rest.compare( 0, 6, "wss://" ) == 0 ? "443" : "80";
 
@@ -131,7 +174,8 @@ std::string BrowserHostAndPort( std::string const & url )
         rest = rest.substr( 0, end );
 
     size_t const colon = rest.rfind( ':' );
-    if ( colon != std::string::npos && rest.find( ']' ) == std::string::npos )
+    size_t const bracket = rest.find( ']' );
+    if ( colon != std::string::npos && ( bracket == std::string::npos || colon > bracket ) )
     {
         port = rest.substr( colon + 1 );
         rest = rest.substr( 0, colon );

@@ -108,6 +108,8 @@ protected:
     bool glancingLast;
     eCoord glanceDirAbs, glanceDirLast;
     bool returnGlanceRequest;
+    bool smartGlanceReturn;   // smart camera: easing a held glance back after release
+    eCoord smartGlanceOffset; // smart camera: the turn a held glance adds, eased out after release
 
     bool renderingMain_;	// flag indicating whether the current rendering process is the main process or just a mirror effect
 

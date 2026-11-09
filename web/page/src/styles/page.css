@@ -299,6 +299,29 @@ html, body {
 .tile-note.is-quiet { color: var(--ink-quiet); }
 .tile-note[hidden] { display: none; }
 
+/* what the game is, one quiet sentence at the bottom left, across from the documents line and
+   in its face (App.tsx; the page's description for a reader and for a search engine that runs
+   the page). The frame's, like the documents line: gone behind a stage and in the game; out of
+   the way of a friend's challenge, which takes the lower left. */
+.home-say {
+  position: absolute;
+  left: 3.7%;
+  top: 93vh;
+  max-width: 40%;
+  margin: 0;
+  font-family: var(--font-label);
+  font-weight: 400;
+  font-size: calc(14 * var(--u));
+  line-height: 1.3;
+  letter-spacing: 0.04em;
+  color: var(--ink-quiet);
+}
+
+.frame:has(.rewards-duel-home) .home-say { visibility: hidden; }
+
+/* a narrow window: two lines, clear of the documents line */
+@media (max-width: 1100px) { .home-say { max-width: 26%; } }
+
 /* the documents line (Docs.tsx): about, conduct, privacy, terms, at the bottom right on
    the audio line's height, in the rear of the label plane. It is the frame's, so it is
    gone behind a stage and in the game. Dim at rest (links: 4.5:1 at any width), ivory
@@ -1254,6 +1277,18 @@ body.is-loading .scene { opacity: var(--scene-a, 1); }
   }
   .docs-line { flex-wrap: wrap; justify-content: center; gap: 8px 22px; }
   .docs-link { font-size: 13px; letter-spacing: 0.1em; }
+  /* upright: centred over the documents line, in the arena's open band under the menu; the
+     cookie question and the hint take that band when they show */
+  .home-say {
+    left: 6%;
+    right: 6%;
+    top: auto;
+    bottom: calc(var(--discord-safe-area-inset-bottom, env(safe-area-inset-bottom)) + 84px);
+    max-width: none;
+    font-size: 14px;
+    text-align: center;
+  }
+  .frame:has(.ck-banner, .hs-hint) .home-say { visibility: hidden; }
   .community-cell {
     height: 36px;
     min-width: 36px;
@@ -1667,6 +1702,16 @@ body.is-friends .ck-banner { display: none; }
     gap: 22px;
   }
   .docs-line { position: static; flex-wrap: nowrap; gap: 18px; }
+  /* the menu runs down the left to the foot here: the sentence goes over the documents line */
+  .home-say {
+    left: auto;
+    right: max(3.83%, var(--discord-safe-area-inset-right, env(safe-area-inset-right)));
+    top: auto;
+    bottom: calc(var(--discord-safe-area-inset-bottom, env(safe-area-inset-bottom)) + 68px);
+    max-width: 50%;
+    text-align: right;
+  }
+  .frame:has(.ck-banner, .hs-hint) .home-say { visibility: hidden; }
   .community-cell { position: static; margin: 0; height: 44px; gap: 10px; padding: 0 12px; border: 1px solid var(--cell-line); background: rgba(8, 11, 16, 0.78); }
   .community-cell:focus-visible { outline: none; border-color: var(--trail); box-shadow: 0 0 0 1px var(--trail); }
   .community-who { display: flex; flex-direction: column; }

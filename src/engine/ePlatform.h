@@ -35,6 +35,7 @@ GNU General Public License for more details.
 #include <vector>
 
 class ePlayerNetID;
+class eCoord;
 
 // the network message carrying a platform login token from client to server
 // (descriptor 380, "platform_login_token", one raw string)
@@ -46,8 +47,19 @@ unsigned short const ePLATFORM_LOGIN_TOKEN_DESCRIPTOR = 380;
 unsigned short const ePLATFORM_CLIENT_CAPS_DESCRIPTOR = 381;
 unsigned short const ePLATFORM_MOVE_DESCRIPTOR = 382;
 
+// the route of the player's position at a round's start, server to client (383, "route_guide":
+// the cycle's net id, the corner count, then x and y of each corner in map coordinates;
+// only to clients that announced "route")
+unsigned short const ePLATFORM_ROUTE_GUIDE_DESCRIPTOR = 383;
+
+// the most corners a client takes from route_guide; a longer route is ignored
+unsigned short const ePLATFORM_ROUTE_GUIDE_MAX_CORNERS = 256;
+
 // the capability a client announces when it follows platform_move
 char const* const ePLATFORM_CAPABILITY_MOVE = "move";
+
+// the capability a client announces when it shows route_guide
+char const* const ePLATFORM_CAPABILITY_ROUTE = "route";
 
 // where a room sends a client (contract section 3, "Moving players")
 struct ePlatformMoveNotice
@@ -305,6 +317,11 @@ public:
     // client: called when the server sends this client elsewhere (message 382)
     typedef void MoveCallback(ePlatformMoveNotice const& notice);
     static void SetMoveCallback(MoveCallback* callback);
+
+    // client: called when the server sends the route of a cycle (message 383, at least two
+    // corners); nothing set (the default): the message is ignored
+    typedef void RouteGuideCallback(unsigned short cycleID, std::vector<eCoord> const& corners);
+    static void SetRouteGuideCallback(RouteGuideCallback* callback);
 
     // server: whether the connection announced capability (forgotten when it logs out)
     static bool ClientHasCapability(int userID, char const* capability);

@@ -56,6 +56,7 @@ export interface FoundRoom {
   region: string;
   sub?: string; // the connecting screen's line under the step, when it is not the room's name (a duel's)
   opponent?: string | null; // a duel's other side by the name they play under (the duel room's VS card)
+  board?: string | null; // the room's leaderboard, as the platform said (undefined: not said)
 }
 
 export class FindFailure extends Error {
@@ -220,12 +221,14 @@ function asServer(answer: QuickPlayAnswer): ServerEntry {
 
 // asks until a room answers, every room stayed full for FIND_TIMEOUT_MS, the platform
 // refused the request, or `signal` aborts (the player backed out: resolves null).
-// `onPhase` drives the finding step. `avoid`: rooms this page just could not reach.
+// `onPhase` drives the finding step. `avoid`: rooms this page just could not reach. `mode`: a
+// Quick Play mode other than the default (modes.ts QUICK_MODES), for a pick only.
 export async function findRoom(
   signal: AbortSignal,
   onPhase: (phase: FindingPhase) => void,
   target: JoinTarget | null = null,
-  avoid: string[] = []
+  avoid: string[] = [],
+  mode: string | null = null
 ): Promise<FoundRoom | null> {
   if (target && ("duel" in target || "duelRoom" in target)) return findDuel(signal, onPhase, target);
   const invite = target !== null;
@@ -246,7 +249,7 @@ export async function findRoom(
     let full = false;
     try {
       const webSocket = webRtcBlocked();
-      const answer = await quickPlay(state.apiUrl, region, latencies, undefined, room, friend?.friend, DISCORD_INSTANCE, avoid, webSocket);
+      const answer = await quickPlay(state.apiUrl, region, latencies, undefined, room, friend?.friend, DISCORD_INSTANCE, avoid, webSocket, invite ? null : mode);
       if (signal.aborted) {
         void giveBackSeat(answer.reservationId);
         return null;
@@ -256,13 +259,13 @@ export async function findRoom(
       const server = asServer(answer);
       // a room asked for over the WebSocket takes it (the connect goes that way)
       if (webSocket) server.lobby = { webSocket: true };
-      return { server, reservationId: answer.reservationId, roomId: answer.roomId, region: answer.region };
+      return { server, reservationId: answer.reservationId, roomId: answer.roomId, region: answer.region, board: answer.board };
     } catch (e) {
       if (e instanceof FindFailure) throw e;
       if (!(e instanceof PlatformError)) throw new FindFailure(String(e));
       // 400/403: this page and the platform disagree; asking again will not help
       if (friend && e.status === 404) throw new FindFailure(t("connect.fail.friendClosed", { name: friend.name }));
-      if (invite && e.status === 404) throw new FindFailure(t("connect.fail.inviteClosed"));
+      if (invite && e.status === 404) throw new FindFailure(t("connect.fail.inviteClosed"), false, false, true);
       // a Discord launch asks the moment it is signed in: Discord may not list the player in the
       // instance yet, so those two are asked again for a few seconds
       const discordLag = (e.code === "not_in_instance" || e.code === "unknown_instance") && Date.now() < discordUntil;
@@ -598,12 +601,17 @@ export async function giveBackSeat(reservationId: string, failed = false): Promi
 
 // ---- invite links ----
 
-// the address that brings a friend into this room: the page itself with ?join=<server id>
-export function inviteLink(serverId: string): string {
+// the address that brings a friend into this room: the page itself with ?join=<server id>, or
+// for a Direct Connect room (on no list, so no code finds it) ?connect=<its address>, which
+// opens Direct Connect with that address (platform/direct.ts readConnectLink)
+export function inviteLink(serverId: string, inviteCode: string | null = null, directAddress: string | null = null): string {
   const url = new URL(location.pathname, location.origin);
-  url.searchParams.set("join", serverId);
-  // the campaign of the page_view it brings (an invited player's source: invite)
+  if (directAddress) url.searchParams.set("connect", directAddress);
+  else url.searchParams.set("join", serverId);
+  // the campaign of the page_view it brings (an invited player's source: invite), and the
+  // sender's invite code (session.ts myInviteCode), so the visit counts for them
   url.searchParams.set("c", "invite");
+  if (inviteCode) url.searchParams.set("l", inviteCode);
   return url.toString();
 }
 
@@ -637,12 +645,23 @@ export async function platformServers(): Promise<ServerEntry[] | null> {
   }
 }
 
-export async function livePlayers(): Promise<number | null> {
+// how many play now: the whole count and each Quick Play mode's, each null below the platform's
+// minShown; `modes` null when the platform does not count by mode (an older one), else every mode
+// it runs (the menu's mode lines follow it: modes.ts setQuickModes)
+export interface LiveCounts {
+  players: number | null;
+  modes: Record<string, number | null> | null;
+}
+
+export async function livePlayers(): Promise<LiveCounts | null> {
   const state = await platformSession();
   if (state.mode !== "platform" || state.config.features.quickplay !== true) return null;
   try {
     const live = await getLive(state.apiUrl);
-    return typeof live.players === "number" && live.players >= Math.max(1, live.minShown) ? live.players : null;
+    const least = Math.max(1, live.minShown);
+    const shown = (n: unknown) => (typeof n === "number" && n >= least ? n : null);
+    const modes = live.modes && typeof live.modes === "object" ? Object.fromEntries(Object.entries(live.modes).map(([k, n]) => [k, shown(n)])) : null;
+    return { players: shown(live.players), modes };
   } catch {
     return null;
   }

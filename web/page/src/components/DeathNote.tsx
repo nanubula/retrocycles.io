@@ -2,19 +2,21 @@
 // they were last told, a small panel under the respawn count says where they stand now: all time,
 // or today when all time did not move. The new place large, how far it moved (up in online green,
 // down in failed red, always with the arrow and the number), and the kills to pass the player just
-// ahead. It shows at once (the places are read after every kill while the cycle rides, and again
-// right at the death) and stays at least MIN_SHOWN_MS, fading out once the cycle rides again
-//; takes no pointer, no focus, no keys. A guest's says
+// ahead (in the board's own terms: round wins on the fortress board). It shows at once (the places
+// are read after every kill while the cycle rides, and again right at the death) and stays at least
+// MIN_SHOWN_MS, fading out once the cycle rides again; takes no pointer, no focus, no keys. A guest's says
 // NOT SAVED. Nothing when nothing moved, or without the platform's leaderboards.
 import { useEffect, useRef, useState } from "react";
 import type { Aa } from "../aa/types";
 import { deathNote, notePlaces, readMyPlaces, type DeathNoteLine } from "../platform/leaderboards";
-import type { MyPlaces } from "../platform/types";
+import type { BoardSort, MyPlaces } from "../platform/types";
+import { Move, toNextWords } from "./BoardTable";
 
 interface DeathNoteProps {
   aa: Aa;
+  board?: string; // the room's board (absent: the platform's first)
+  sort?: BoardSort; // that board's default sort
 }
-import { Move } from "./BoardTable";
 import { num, t } from "../i18n";
 
 const POLL_MS = 100;
@@ -46,7 +48,7 @@ function riding(aa: Aa): boolean {
   }
 }
 
-export function DeathNote({ aa }: DeathNoteProps) {
+export function DeathNote({ aa, board, sort }: DeathNoteProps) {
   const [note, setNote] = useState<DeathNoteLine | null>(null);
   // riding again while the note stays: its fade, over the time left (ms)
   const [leaving, setLeaving] = useState(0);
@@ -79,7 +81,7 @@ export function DeathNote({ aa }: DeathNoteProps) {
       if (now && ++polls.current % SCORE_EVERY === 0) {
         const s = ownScore(aa);
         if (s !== null && score.current !== null && s > score.current)
-          window.setTimeout(() => void readMyPlaces().then((p) => p && (fresh.current = p)), AFTER_KILL_MS);
+          window.setTimeout(() => void readMyPlaces(board, sort).then((p) => p && (fresh.current = p)), AFTER_KILL_MS);
         score.current = s;
       }
       if (now === alive.current) return;
@@ -105,15 +107,16 @@ export function DeathNote({ aa }: DeathNoteProps) {
       // just died: what the last kill brought at once, then the platform's word
       show(fresh.current);
       fresh.current = null;
-      for (const ms of READS_MS) timers.current.push(window.setTimeout(() => void readMyPlaces().then(show), ms));
+      for (const ms of READS_MS) timers.current.push(window.setTimeout(() => void readMyPlaces(board, sort).then(show), ms));
     }, POLL_MS);
     return () => {
       window.clearInterval(tick);
       clear();
     };
-  }, [aa]);
+  }, [aa, board, sort]);
 
   if (!note) return null;
+  const by = sort ?? "kills";
   const { place, was } = note;
   const moved = was === null ? null : was - place.rank;
   return (
@@ -141,9 +144,11 @@ export function DeathNote({ aa }: DeathNoteProps) {
       <p className="dn-say">
         {place.rank === 1
           ? t("game.note.first")
-          : place.next && place.killsToNext
-            ? t("game.note.toNext", { n: place.killsToNext, name: place.next })
-            : null}
+          : by === "kills"
+            ? place.next && place.killsToNext !== null && place.killsToNext > 0
+              ? t("game.note.toNext", { n: place.killsToNext, name: place.next })
+              : null
+            : toNextWords(place, by)}
         {!note.saved && " " + t("game.note.saveIt")}
       </p>
     </div>

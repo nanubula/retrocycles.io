@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "./client";
 import { platformState } from "./session";
-import type { BoardPage, BoardRow, BoardSort, BoardWindow, MyPlace, MyPlaces, PlatformState } from "./types";
+import type { BoardInfo, BoardPage, BoardRow, BoardSort, BoardWindow, MyPlace, MyPlaces, PlatformState } from "./types";
 
 export function leaderboardsOn(platform: PlatformState = platformState()): boolean {
   return platform.mode === "platform" && platform.config.features.leaderboards === true;
@@ -257,25 +257,120 @@ export function deathNote(places: MyPlaces): DeathNoteLine | null {
   return null;
 }
 
-// the places read once when a game with leaderboards starts: the baseline the first death compares with
-export function useLeaderboardBaseline(active: boolean): void {
-  const done = useRef(false);
+// the places read once when a game with leaderboards starts (and again when the room's board is
+// known): the baseline the first death compares with
+export function useLeaderboardBaseline(active: boolean, board?: string, sort?: BoardSort): void {
+  const done = useRef("");
   useEffect(() => {
     if (!active) {
-      done.current = false;
+      done.current = "";
       return;
     }
-    if (done.current) return;
-    done.current = true;
-    void readMyPlaces().then((p) => p && notePlaces(p));
-  }, [active]);
+    const k = (board ?? "") + "/" + (sort ?? "");
+    if (done.current === k) return;
+    done.current = k;
+    void readMyPlaces(board, sort).then((p) => p && notePlaces(p));
+  }, [active, board, sort]);
+}
+
+// ---- the boards and their sorts
+
+const SORTS: BoardSort[] = ["rounds", "kills", "kd", "wins", "winpct"];
+// a board that does not list its sorts (an older platform)
+export const DEFAULT_SORTS: BoardSort[] = ["kills", "kd", "wins"];
+
+// a board's sorts as the page uses them: the known ones in the platform's order, its default first
+export function boardSorts(board: BoardInfo | null | undefined): BoardSort[] {
+  const listed = Array.isArray(board?.sorts) ? board.sorts.filter((s) => SORTS.includes(s)) : [];
+  return listed.length ? listed : DEFAULT_SORTS;
+}
+
+// the columns of a board, in its sorts' order with deaths after kills: round wins, kills, deaths,
+// K/D, match wins, win % on the fortress board; kills, deaths, K/D, wins, win % on deathmatch
+export type BoardColumn = BoardSort | "deaths";
+
+export function boardColumns(sorts: readonly BoardSort[]): BoardColumn[] {
+  const cols: BoardColumn[] = [];
+  for (const s of sorts) {
+    cols.push(s);
+    if (s === "kills") cols.push("deaths");
+  }
+  if (!cols.includes("deaths")) cols.splice(cols.indexOf("kd") >= 0 ? cols.indexOf("kd") : cols.length, 0, "deaths");
+  return cols;
+}
+
+// the sort on each board, chosen by the player or else the board's own default: a board never
+// opens on a sort it does not keep
+export function useBoardSorts(boards: readonly BoardInfo[]): [(board: string | null) => BoardSort, (board: string | null, sort: BoardSort) => void] {
+  const [chosen, setChosen] = useState<Record<string, BoardSort>>({});
+  const sortOf = useCallback(
+    (board: string | null) => {
+      const sorts = boardSorts(boards.find((b) => b.id === board));
+      const pick = board ? chosen[board] : undefined;
+      return pick && sorts.includes(pick) ? pick : sorts[0];
+    },
+    [boards, chosen]
+  );
+  const choose = useCallback((board: string | null, sort: BoardSort) => {
+    if (board) setChosen((c) => (c[board] === sort ? c : { ...c, [board]: sort }));
+  }, []);
+  return [sortOf, choose];
+}
+
+// the board last played or chosen, kept over reloads: the Leaderboards page opens on it. Storage
+// can be away (a private window, blocked site data): then it is only this load's
+const LAST_BOARD_KEY = "rc.lastBoard";
+
+export function readLastBoard(): string | null {
+  try {
+    return localStorage.getItem(LAST_BOARD_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function saveLastBoard(board: string): void {
+  try {
+    localStorage.setItem(LAST_BOARD_KEY, board);
+  } catch {
+    // not kept: the next load opens on the first board
+  }
+}
+
+// the board of an official room: what Quick Play said, else the room's match (GET
+// /v1/rooms/{id}/match `board`), read once per room (again every 10 s while it has no match yet);
+// null when neither says (the first board then)
+export function useRoomBoard(serverId: string | null, said: string | null | undefined): string | null {
+  const [read, setRead] = useState<{ serverId: string; board: string | null } | null>(null);
+  const [tries, setTries] = useState(0);
+  useEffect(() => {
+    const url = apiUrl();
+    if (!serverId || said !== undefined || !url || !leaderboardsOn()) return;
+    if (read?.serverId === serverId) return;
+    let gone = false;
+    let timer = 0;
+    api.getRoomMatch(url, serverId).then(
+      (match) => !gone && setRead({ serverId, board: typeof match.board === "string" ? match.board : null }),
+      // no match yet, or the platform is away: the first board until a later read says
+      () => {
+        timer = window.setTimeout(() => !gone && setTries((n) => n + 1), 10000);
+      }
+    );
+    return () => {
+      gone = true;
+      window.clearTimeout(timer);
+    };
+  }, [serverId, said, read, tries]);
+  if (!serverId) return null;
+  if (said !== undefined) return said;
+  return read?.serverId === serverId ? read.board : null;
 }
 
 // the boards the platform keeps (read once per load); empty without leaderboards
-let boardList: { id: string; name: string }[] | null = null;
+let boardList: BoardInfo[] | null = null;
 let boardListRead: Promise<void> | null = null;
 
-export function useBoardList(enabled: boolean): { id: string; name: string }[] {
+export function useBoardList(enabled: boolean): BoardInfo[] {
   const [list, setList] = useState(boardList ?? []);
   useEffect(() => {
     const url = apiUrl();

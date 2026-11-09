@@ -17,9 +17,12 @@
 <!-- the tab's icon: the RC mark (public/favicon.svg; favicon.ico 16/32/48 for the rest) -->
 <link rel="icon" href="./favicon.ico" sizes="any">
 <link rel="icon" href="./favicon.svg" type="image/svg+xml">
-<title>Retrocycles</title>
-<!-- what a posted link shows (Open Graph, the X player card), filled in by tools/social.ts -->
+<title>Retrocycles - Free Online Multiplayer Light Cycle Game</title>
+<!-- the description, the canonical address, the structured data and what a posted link shows
+     (Open Graph, the X player card): filled in by tools/social.ts -->
 <!--rc:social-->
+<!-- no script: the page in words (#root below) at once -->
+<noscript><link rel="stylesheet" href="./shell-noscript.css"></noscript>
 <!-- The wasm client's files start downloading with the page instead of after the app's
      script, aa_api.js and client_opt.js have run one after the other (src/aa/loader.ts).
      The runtime fetches the wasm and the data package with a same-origin fetch(), which
@@ -42,12 +45,47 @@
 <!-- The scene's opening frame, rendered by the game (public/poster/NOTICE.txt): faded in
      as soon as it has loaded (main.tsx: no inline handlers, the Content-Security-Policy allows
      no inline script), while the client loads; faded into the live scene when it draws
-     (App.tsx), then removed. -->
+     (App.tsx), then removed. Hidden from screen readers (decoration over the scene); the alt is
+     for what reads the HTML (image search, site checkers that count an empty alt as missing). -->
 <picture id="poster" class="poster" aria-hidden="true">
   <source srcset="./poster/scene.avif" type="image/avif">
-  <img src="./poster/scene.webp" alt="" fetchpriority="high" decoding="async">
+  <img src="./poster/scene.webp" alt="Light cycles and their walls in the Retrocycles arena" fetchpriority="high" decoding="async">
 </picture>
-<div id="root"></div>
+<!-- The page in words, for what reads the HTML without running it (search engines, link
+     previews) and for a browser that cannot run the game: what Retrocycles is, its modes and the
+     public pages (tools/social.ts writes the canonical link and the structured data in the head).
+     The app replaces it when it mounts (main.tsx createRoot) with the home screen, which says
+     the same in short (its h1, the home-say line, the documents line). Shown at once with no
+     script (public/shell-noscript.css); hidden while the app starts (main.tsx); shown after 3 s
+     when the app's script never ran (src/styles/shell.css). Keep it true to the game:
+     the same words as how-to-play/ and the modes (src/modes.ts). -->
+<div id="root"><div class="shell" id="shell">
+<header>
+<h1>Retrocycles</h1>
+<p class="shell-say">A free online light cycle game in your browser. No download, no sign-up.</p>
+</header>
+<noscript><p class="shell-note">The game needs JavaScript and WebGL. Turn on JavaScript to play.</p></noscript>
+<p>Retrocycles is an independent browser build of <a href="./about/">Armagetron Advanced</a>, the open-source lightcycle game. Your light cycle leaves a wall behind it. Make the other riders hit a wall, and do not hit one yourself. The game is fast, and a round is short.</p>
+<h2>Ways to play</h2>
+<ul>
+<li><b>Quick Play</b>: join an online room with other players at once. You score when another rider hits your wall. After a crash, you ride again.</li>
+<li><b>Challenge a Friend</b>: send a friend a link and play a 1v1 Sumo match, first to 12 points.</li>
+<li><b>Leaderboards</b>: see where you rank against everyone in Quick Play.</li>
+<li><b>Server Browser</b>: join the Armagetron Advanced community servers.</li>
+<li><b>Training</b>: practise against the AI, alone.</li>
+</ul>
+<h2>Start to play</h2>
+<p>Open retrocycles.io and press Quick Play. You play as a guest; an account is optional and keeps your name and progress. Turn with the arrow keys, or D F and J K. Hold Space or the down arrow to brake. On a phone or tablet, tap the arrow buttons at each side of the screen.</p>
+<nav class="shell-nav" aria-label="Retrocycles">
+<a href="./how-to-play/">How to play</a>
+<a href="./play-with-friends/">Play with friends</a>
+<a href="./news">News</a>
+<a href="./about/">About</a>
+<a href="./conduct/">Code of conduct</a>
+<a href="./privacy/">Privacy</a>
+<a href="./terms/">Terms</a>
+</nav>
+</div></div>
 <script type="module" src="./src/main.tsx"></script>
 </body>
 </html>

@@ -5,8 +5,11 @@
 // visible focusable elements in DOM order, wrapping at both ends. Text fields keep
 // their keys (the client leaves them alone while one has the focus). Links count (the
 // documents' line under the queue, the sign-up's consent line); App.tsx follows them on
-// Enter, which the client takes as well.
-const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+// Enter, which the client takes as well. An element with tabindex="-1" is out of the order, as
+// the browser keeps it: the pointer's alone (the Server Browser's hidden way home round the
+// wordmark), or one of a group with a single stop (the windows' tabs; the arrows move along those).
+const NOT_OUT = ':not([tabindex="-1"])';
+const FOCUSABLE = ["a[href]", "button:not([disabled])", "input:not([disabled])", "textarea:not([disabled])", "[tabindex]"].map((s) => s + NOT_OUT).join(", ");
 
 function visible(el: HTMLElement): boolean {
   if (el.hidden || el.closest("[hidden]")) return false;

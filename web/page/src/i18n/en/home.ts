@@ -4,6 +4,7 @@
 export const home = {
   // the play modes, rows of the home menu (uppercased by CSS) and the stage's head
   "home.mode.quick": "Quick Play",
+  "home.mode.fort": "Fortress",
   "home.mode.ranked": "Ranked",
   "home.mode.browser": "Server Browser",
   "home.mode.leaderboards": "Leaderboards",
@@ -17,7 +18,7 @@ export const home = {
   // the note under the queue (lower case, terse; the client's own reasons stay as the game says them)
   "home.note.noServer": "no server to connect to: servers.json is empty",
   "home.note.notLoaded": "the client is not loaded",
-  "home.note.inviteNotHere": "the invited room is not on this page",
+  "home.note.inviteNotHere": "This site cannot open the game you were invited to.",
   // {why}: why finding a room failed (the platform's words, or the page's)
   "home.note.finding": "finding: {why}",
   // {why}: why following a move to another room failed
@@ -73,8 +74,12 @@ export const home = {
   "home.embed.fullscreen": "Full screen",
   "home.embed.leaveFullscreen": "Leave full screen",
 
+  // the home screen's one line on what the game is, at the foot (App.tsx, .home-say)
+  "home.say": "A free multiplayer light cycle game in your browser.",
+
   // the documents line (links to the English documents)
   "home.docs.aria": "About and policies",
+  "home.docs.howToPlay": "how to play",
   "home.docs.about": "about",
   "home.docs.conduct": "conduct",
   "home.docs.privacy": "privacy",

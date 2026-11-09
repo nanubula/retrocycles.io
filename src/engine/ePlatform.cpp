@@ -16,10 +16,12 @@ GNU General Public License for more details.
 
 #include "ePlatform.h"
 
+#include "eCoord.h"
 #include "ePlayer.h"
 #include "nNetwork.h"
 #include "tError.h"
 
+#include <cmath>
 #include <cstring>
 #include <utility>
 
@@ -295,6 +297,11 @@ static nDescriptor se_platformClientCapsDescriptor(ePLATFORM_CLIENT_CAPS_DESCRIP
 static void se_PlatformMoveHandler(nMessage& m);
 static nDescriptor se_platformMoveDescriptor(ePLATFORM_MOVE_DESCRIPTOR, &se_PlatformMoveHandler, "platform_move");
 
+static ePlatform::RouteGuideCallback* se_routeGuideCallback = nullptr;
+
+static void se_RouteGuideHandler(nMessage& m);
+static nDescriptor se_routeGuideDescriptor(ePLATFORM_ROUTE_GUIDE_DESCRIPTOR, &se_RouteGuideHandler, "route_guide");
+
 void ePlatform::SetClientCapabilities(tString const& capabilities)
 {
     se_platformClientCapabilities = capabilities;
@@ -303,6 +310,11 @@ void ePlatform::SetClientCapabilities(tString const& capabilities)
 void ePlatform::SetMoveCallback(MoveCallback* callback)
 {
     se_platformMoveCallback = callback;
+}
+
+void ePlatform::SetRouteGuideCallback(RouteGuideCallback* callback)
+{
+    se_routeGuideCallback = callback;
 }
 
 bool ePlatform::HasWord(std::string const& words, char const* word)
@@ -404,6 +416,37 @@ static void se_PlatformMoveHandler(nMessage& m)
         (*se_platformMoveCallback)(notice);
     else
         con << "Platform: the server moves this client to " << name << ", but nothing here follows moves.\n";
+}
+
+static void se_RouteGuideHandler(nMessage& m)
+{
+    // only the server sends routes, and only clients that show them use them
+    if (sn_GetNetState() != nCLIENT || m.SenderID() != 0 || !se_routeGuideCallback)
+        return;
+
+    // the cycle and the count, then two REALs (two shorts each) per corner; a short or
+    // oversized message is dropped before anything is read past its end
+    if (m.DataLen() < 2)
+        return;
+    unsigned short cycleID = 0, count = 0;
+    m >> cycleID;
+    m >> count;
+    if (count < 2 || count > ePLATFORM_ROUTE_GUIDE_MAX_CORNERS || m.DataLen() < 2 + 4 * static_cast<int>(count))
+        return;
+
+    std::vector<eCoord> corners;
+    corners.reserve(count);
+    for (int i = 0; i < count; ++i)
+    {
+        REAL x = 0, y = 0;
+        m >> x;
+        m >> y;
+        if (!std::isfinite(x) || !std::isfinite(y))
+            return;
+        corners.push_back(eCoord(x, y));
+    }
+
+    (*se_routeGuideCallback)(cycleID, corners);
 }
 
 // a connection came or went: a server forgets what it announced; a client announces itself

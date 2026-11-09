@@ -414,6 +414,9 @@ void eCamera::MyInit(){
     glancingForward=glancingBack=glancingLeft=glancingRight=false;
     glancingLast = false;
     returnGlanceRequest = false;
+    glanceDirAbs = glanceDirLast = dir;
+    smartGlanceReturn = false;
+    smartGlanceOffset = eCoord(1,0);
     glanceSmooth=glanceSmoothAbs=0;
 
     lastSwitch=-100;
@@ -1809,7 +1812,8 @@ void eCamera::Timestep(REAL ts){
                         // fixes occasional glance issues here
                         glanceDirAbs = Center()->Direction();
                         glanceDirAbs.Normalize();
-                        
+                        glanceDirLast = glanceDirAbs.Turn( glanceDir_ );
+
                         glancingLast = true;
                         returnGlanceRequest = false;
                     }
@@ -1829,14 +1833,23 @@ void eCamera::Timestep(REAL ts){
                         if( s > 0.01 )
                         {
                             dir = glanceDirLast;
-                            
+
                             // use our own glance return method instead of the standard one
                             glanceSmooth = 0;
-                            returnGlanceRequest = true;
                             glanceDirLast = cycleDir;
-                            
-                            // without this we have one frame of the camera being the wrong direction
-                            return Timestep(ts);
+
+                            // dir already holds the glance, so drop the relative glance turn
+                            // in this frame too; else we have one frame of the camera being
+                            // the wrong direction
+                            glanceDir_ = eCoord(1,0);
+
+                            // start the fast return right away
+                            returnGlanceRequest = true;
+                            turnSpeed += GLANCE_SPEED;
+                            if( (( dir - ( Center()->Direction() ) ).NormSquared()) < 0.01 )
+                            {
+                                returnGlanceRequest = false;
+                            }
                         }
                     }
                 }
@@ -2024,10 +2037,32 @@ void eCamera::Timestep(REAL ts){
                     newpos=pos+ (pos-centerpos).Turn(-ts*.5,ts*.5);
                 }
 
+                // ease a released held glance back to the normal glance direction
+                if ( smartGlanceReturn )
+                {
+                    if ( glancingBack || glancingLeft || glancingRight || glancingForward )
+                    {
+                        smartGlanceReturn = false;
+                    }
+                    else
+                    {
+                        REAL angle = atan2( smartGlanceOffset.y, smartGlanceOffset.x ) / ( 1 + GLANCE_SPEED * ts );
+                        if ( fabs( angle ) < .01 )
+                        {
+                            smartGlanceReturn = false;
+                        }
+                        else
+                        {
+                            smartGlanceOffset = eCoord( cos( angle ), sin( angle ) );
+                            glanceDir_ = glanceDir_.Turn( smartGlanceOffset );
+                        }
+                    }
+                }
+
                 if ( userCameraControl < .25  && se_ClampCamera(mode) )
                 {
                     bound = true;
-                    
+
                     if( se_holdGlancing )
                     {
                         if( !glancingLast )
@@ -2036,7 +2071,8 @@ void eCamera::Timestep(REAL ts){
                             {
                                 glanceDirAbs = Center()->Direction();
                                 glanceDirAbs.Normalize();
-                                
+                                smartGlanceOffset = eCoord(1,0);
+
                                 glancingLast = true;
                             }
                         }
@@ -2048,10 +2084,19 @@ void eCamera::Timestep(REAL ts){
                                 // glanceDir = glanceDirAbs + glanceDir - centerCycleDir
                                 eCoord c = glanceDirAbs.Turn( glanceDir_ );
                                 glanceDir_ = (CenterCycleDir().Conj()).Turn(c);
+
+                                // the turn the hold adds to the glance, eased out on release
+                                smartGlanceOffset = (CenterCycleDir().Conj()).Turn( glanceDirAbs );
+                                smartGlanceOffset.Normalize();
                             }
                             else
                             {
                                 glancingLast = false;
+
+                                // the glance itself ends as without hold; keep the turn the
+                                // hold added this frame and ease it out from the next
+                                glanceDir_ = glanceDir_.Turn( smartGlanceOffset );
+                                smartGlanceReturn = true;
                             }
                         }
                     }
@@ -2154,6 +2199,17 @@ void eCamera::Timestep(REAL ts){
         */
     default:
         break;
+    }
+
+    // no glance key held: forget the held glance in every mode, so that a release the
+    // hold code above did not see cannot carry an old glanceDirAbs into the next glance
+    if ( !( glancingBack || glancingLeft || glancingRight || glancingForward ) )
+    {
+        glancingLast = false;
+    }
+    if ( effectiveMode != CAMERA_SMART )
+    {
+        smartGlanceReturn = false;
     }
 
 

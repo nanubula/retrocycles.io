@@ -1,4 +1,4 @@
-// The play page's ways to the trust documents (about/, conduct/, privacy/, terms/: static
+// The play page's ways to the documents (how-to-play/, about/, conduct/, privacy/, terms/: static
 // pages beside it, built by tools/legal-pages.ts). The documents line is a quiet row at
 // the bottom right of the queue frame, so it is gone behind a stage and in the game. The
 // conduct line is the code of conduct in one line over the game, the first time a player
@@ -13,7 +13,7 @@ import { DISCORD } from "../links";
 import { openOutside } from "../discord";
 import { useNews } from "../platform/news";
 
-export type DocId = "about" | "conduct" | "privacy" | "terms" | "age";
+export type DocId = "how-to-play" | "play-with-friends" | "about" | "conduct" | "privacy" | "terms" | "age";
 
 // relative to the play page (Vite's base "./"): the document's directory
 export function docHref(id: DocId): string {
@@ -30,6 +30,7 @@ export function DocLink({ id, children }: { id: DocId; children: ReactNode }) {
 }
 
 const LINE: Array<{ id: DocId; label: PlainKey }> = [
+  { id: "how-to-play", label: "home.docs.howToPlay" },
   { id: "about", label: "home.docs.about" },
   { id: "conduct", label: "home.docs.conduct" },
   { id: "privacy", label: "home.docs.privacy" },

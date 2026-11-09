@@ -71,7 +71,8 @@ export const connect = {
   "connect.fail.platformGone": "the platform is gone",
   "connect.fail.malformed": "a malformed answer",
   "connect.fail.friendClosed": "{name} cannot be joined now",
-  "connect.fail.inviteClosed": "the invited room is closed",
+  // a whole sentence, shown without the "finding: " lead
+  "connect.fail.inviteClosed": "The game you were invited to has ended. Press Quick Play to find a new game.",
   "connect.fail.privateEnded": "that private room has ended",
   "connect.fail.privateBusy": "every private room is taken right now, try again in a few minutes",
   "connect.fail.duelEnded": "that duel has ended",
@@ -103,6 +104,8 @@ export const connect = {
   "connect.boards.detail": "Player details",
   "connect.boards.unavailable": "The leaderboards need the Retrocycles platform.",
   "connect.boards.play": "play",
+  // said to a screen reader when another board opens
+  "connect.boards.showing": "{name} leaderboard",
 
   // the page's title
   "connect.browser.title": "Servers",

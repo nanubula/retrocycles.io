@@ -119,7 +119,7 @@ libtron_a_SOURCES=tron/gAIBase.cpp tron/gAIBase.h tron/gAICharacter.cpp tron/gAI
 	tron/gMenus.cpp tron/gMenus.h tron/gParser.cpp tron/gParser.h tron/gParticles.cpp tron/gParticles.h\
 	tron/gSensor.cpp tron/gSensor.h tron/gServerBrowser.cpp tron/gServerBrowser.h tron/gSparks.cpp tron/gSparks.h\
 	tron/gSpawn.cpp tron/gSpawn.h tron/gStuff.cpp tron/gStuff.h tron/gTeam.cpp tron/gTeam.h tron/gWall.cpp\
-	tron/gWall.h tron/gWinZone.cpp tron/gWinZone.h\
+	tron/gWall.h tron/gWinZone.cpp tron/gWinZone.h tron/gRouteGuide.cpp tron/gRouteGuide.h\
 	tron/gFriends.h tron/gFriends.cpp\
 	tron/gServerFavorites.h tron/gServerFavorites.cpp
 
@@ -191,8 +191,8 @@ unit_tests_SOURCES = thirdparty/doctest/doctest.h \
 	test/eRectangle_test.cpp test/eAxis_test.cpp \
 	test/tMath_test.cpp test/tSysTime_test.cpp test/tCommandLine_test.cpp \
 	test/tEventQueue_test.cpp test/tDirectories_test.cpp test/md5_test.cpp test/memtest_adhoc_test.cpp \
-	test/eTimer_test.cpp test/eGrid_test.cpp test/eGrid_adhoc_test.cpp \
-	test/ePath_test.cpp \
+	test/eTimer_test.cpp test/eGrid_test.cpp test/eGrid_adhoc_test.cpp test/eCamera_glance_test.cpp \
+	test/ePath_test.cpp test/gRouteGuide_test.cpp \
 	test/ePlayer_test.cpp test/ePlayerNetID_test.cpp test/eTeam_test.cpp \
 	test/nSocket_test.cpp test/nNetwork_test.cpp test/nMessage_test.cpp \
 	test/nTransport_test.cpp test/nTransportRtc_test.cpp \

@@ -17,8 +17,8 @@ import { isTextField, moveFocus } from "../keyboard";
 import { keyLabel } from "../keys";
 import { applyReview, applyUndo, copyText, isStock, readPaste, stockText, type Review, type Undo } from "../settings/cfg";
 import { CLASSIC_START_VALUES, CLASSIC_VALUES, lookOf, MODERN_VALUES, noteLook } from "../settings/classicLook";
-import { CLASSIC_HUD_VALUES, setHudStyle, useHudStyle } from "../settings/hudStyle";
-import { CAMERA_PRESETS, LAYOUT_ACTIONS, LAYOUTS, layoutOf, presetOf, type Layout } from "../settings/presets";
+import { CLASSIC_HUD_VALUES, setHudStyle, setRubberGlow, useHudStyle, useRubberGlow } from "../settings/hudStyle";
+import { CAMERA_PRESETS, GLANCE_029, GLANCE_04, LAYOUT_ACTIONS, LAYOUTS, layoutOf, presetOf, type Layout } from "../settings/presets";
 import { ALL_ROWS, actionWords, INSTANT_CHATS, optionText, REFERENCE_SPEED, rowOf, pitchFromTilt, TAB_ROWS, TABS, tiltFromPitch, TOUCH_ROWS, TOUCH_TABS, type Option, type Placed, type Row, type SliderRow, type TabId } from "../settings/schema";
 import { en, LANGS, setLang, t, useLang, type Lang, type PlainKey } from "../i18n";
 import { touchPrimary } from "../compact";
@@ -50,7 +50,7 @@ export const SHARED_COMPUTER_KEY = "rc.sharedComputer";
 const TAB_KEY = "rc.settingsTab";
 
 // the rows whose focus holds a glance on the preview
-const GLANCE_ROWS = new Set(["rig-glance", "g-back", "g-rise", "g-pitch", "glance-copy", "smart-glance"]);
+const GLANCE_ROWS = new Set(["rig-glance", "g-back", "g-rise", "g-pitch", "glance-copy"]);
 
 // the part of the camera course (SCENE_PLAYER_COURSE) that shows a row at its moment: steady
 // straights for where the camera sits, S-bends for following turns, reversals for the 180
@@ -283,6 +283,7 @@ export const Settings = forwardRef<SettingsHandle, SettingsProps>(function Setti
 
   const value = (n: string) => store.get(n).value;
   const hudStyle = useHudStyle();
+  const glowOn = useRubberGlow();
 
   const ensureCustom = () => {
     const q = value("BROWSER_QUALITY");
@@ -300,6 +301,7 @@ export const Settings = forwardRef<SettingsHandle, SettingsProps>(function Setti
   };
 
   const resetRow = (row: Row) => {
+    if (row.kind === "rubber-glow") return setRubberGlow(true);
     const stock = stockText(row);
     if (stock !== null) setRow(row, stock);
   };
@@ -502,6 +504,7 @@ export const Settings = forwardRef<SettingsHandle, SettingsProps>(function Setti
     } else if (values.length) store.setMany(values);
     if (which === "controls") applyLayout(LAYOUTS[0]);
     if (which === "camera") store.setMany(Object.entries(CAMERA_PRESETS[0].values));
+    if (which === "hud") setRubberGlow(true);
   };
 
   const resetNow = () => {
@@ -622,6 +625,8 @@ export const Settings = forwardRef<SettingsHandle, SettingsProps>(function Setti
     if (row.showWhen && value(row.showWhen.name) !== row.showWhen.value) return null;
     // the game's own readouts: only under CLASSIC; MODERN draws its own
     if (row.classicHud && hudStyle !== "classic") return null;
+    // and the page's own, only under MODERN
+    if (row.modernHud && hudStyle !== "modern") return null;
     const off = greyed(row);
     const common = { id: row.id, label: t(row.label), hint: row.hint && t(row.hint), tab: where };
     switch (row.kind) {
@@ -909,6 +914,13 @@ export const Settings = forwardRef<SettingsHandle, SettingsProps>(function Setti
             />
           </RowShell>
         );
+      // MODERN's rubber warning glow (settings/hudStyle.ts): a page choice, on by default
+      case "rubber-glow":
+        return (
+          <RowShell {...common} changed={!glowOn} onReset={() => setRubberGlow(true)}>
+            <Switch id={row.id} on={glowOn} onChange={setRubberGlow} />
+          </RowShell>
+        );
       case "graphics-preset": {
         const now = lookOf(value);
         return (
@@ -974,6 +986,15 @@ export const Settings = forwardRef<SettingsHandle, SettingsProps>(function Setti
             </button>
           </RowShell>
         );
+      // the 0.4 client's glance: on is all three of GLANCE_04 at once, off puts back the 0.2.9 values
+      case "glance-04": {
+        const on = Object.entries(GLANCE_04).every(([k, v]) => Number(value(k)) === Number(v));
+        return (
+          <RowShell {...common}>
+            <Switch id={row.id} on={on} onChange={(x) => store.setMany(Object.entries(x ? GLANCE_04 : GLANCE_029))} />
+          </RowShell>
+        );
+      }
       case "fullscreen":
         return (
           <RowShell {...common}>
@@ -1144,7 +1165,7 @@ export const Settings = forwardRef<SettingsHandle, SettingsProps>(function Setti
     );
   }
 
-  const changedHere = view === "tab" && !query && ALL_ROWS.some((p) => p.tab === tab && "name" in p.row && typeof p.row.name === "string" && !isStock(p.row, value(p.row.name)));
+  const changedHere = view === "tab" && !query && (ALL_ROWS.some((p) => p.tab === tab && "name" in p.row && typeof p.row.name === "string" && !isStock(p.row, value(p.row.name))) || (tab === "hud" && !glowOn));
 
   return (
     <section

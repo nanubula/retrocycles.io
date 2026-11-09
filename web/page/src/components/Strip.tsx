@@ -5,7 +5,8 @@
 // is a step bigger than the other rows, so it reads first wherever the wall is. Hovering or
 // focusing mode k tells the page, which plays the attract scene to state k (App.tsx);
 // clicking selects.
-// Quick Play carries how many play now, when the platform says enough do (livePlayers).
+// Quick Play and its mode lines (Fortress) carry how many play now, each its own mode's, when the
+// platform says enough do (livePlayers).
 // The nav's children are the mode rows (in MODES order) and then the note: App.tsx finds
 // row i as `children[i]`.
 import { forwardRef, useLayoutEffect, useRef } from "react";
@@ -22,7 +23,7 @@ export interface Note {
 interface StripProps {
   focused: number;
   note: Note | null;
-  live: number | null;
+  live: Partial<Record<Mode, number | null>>; // how many play now, by line (none: no count)
   onFocusTile(index: number, moveDom: boolean): void;
   onSelect(mode: Mode): void;
 }
@@ -227,9 +228,9 @@ export const Strip = forwardRef<HTMLElement, StripProps>(function Strip({ focuse
             onClick={() => onSelect(m.mode)}
           >
             <span className="tile-label">{m.title}</span>
-            {m.mode === "quick" && live !== null && (
-              <span className="tile-count" id="live-count">
-                {t("home.livePlaying", { live })}
+            {live[m.mode] != null && (
+              <span className="tile-count" id={m.mode === "quick" ? "live-count" : "live-count-" + m.mode}>
+                {t("home.livePlaying", { live: live[m.mode]! })}
               </span>
             )}
           </button>

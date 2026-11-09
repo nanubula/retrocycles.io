@@ -38,9 +38,8 @@ for retrocycles.io.
 
 You may have just stumbled here into this git repository by accident and just want to play the game. 
 If that is the case, you do not need to bother with the source code here. 
-The easiest ways to get the game running are over 
-[Steam, it is called Retrocycles there](https://store.steampowered.com/app/1306180/Retrocycles/) and 
-[Itch.io](https://armagetronad.itch.io/armagetronad). Grab current release downloads from [the project website](https://www.armagetronad.org/downloads.php).
+The easiest way to play is in your browser at [retrocycles.io](https://retrocycles.io), with nothing to install. 
+For the desktop game, use [Itch.io](https://armagetronad.itch.io/armagetronad) or grab current release downloads from [the project website](https://www.armagetronad.org/downloads.php).
 
 There are more installation paths; check them out on [the download archive](https://download.armagetronad.org/docs/install/).
 

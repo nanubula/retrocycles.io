@@ -1,0 +1,78 @@
+/* The page in words (index.html #shell): what a search engine or a link preview reads in the
+   HTML, and what a browser that cannot run the game shows. With no script it shows at once
+   (public/shell-noscript.css). Once the app's script runs it stays out of sight (.is-app,
+   main.tsx) until the app replaces it with the home screen, which says the same in short; so no
+   load shows both. Only when the script never runs (blocked, failed to download) does it fade in
+   after 3 s. Shown, it is a quiet document over the poster: the documents' look
+   (src/legal/docs.css), and the one place on the play page that scrolls. */
+
+.shell {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  overflow-y: auto;
+  padding: calc(48 * var(--u)) 16px;
+  background: rgba(0, 0, 0, 0.82);
+  color: var(--grey);
+  font-family: var(--font-ui);
+  font-size: calc(18 * var(--u));
+  line-height: 1.6;
+  -webkit-font-smoothing: auto;
+  opacity: 0;
+  animation: shell-in 0.4s ease-out 3s forwards;
+}
+
+.shell > * {
+  max-width: 40rem;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.shell.is-app {
+  animation: none;
+  visibility: hidden;
+}
+
+@keyframes shell-in {
+  to { opacity: 1; }
+}
+
+.shell h1,
+.shell h2,
+.shell-nav a {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  -webkit-font-smoothing: none;
+  font-smooth: never;
+  color: var(--ivory);
+}
+
+.shell h1 {
+  margin: 0;
+  font-size: calc(48 * var(--u));
+  line-height: 1.1;
+}
+
+.shell h2 {
+  margin: 1.6em 0 0.4em;
+  font-size: calc(20 * var(--u));
+}
+
+.shell-say { margin: 0.4em 0 1.2em; color: var(--ivory); }
+.shell-note { color: var(--amber); }
+.shell ul { padding-left: 1.2em; }
+.shell b { color: var(--ivory); font-weight: 600; }
+.shell a { color: inherit; }
+.shell a:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
+
+.shell-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6em 1.4em;
+  margin-top: 2em;
+}
+
+.shell-nav a { text-decoration: none; font-size: calc(16 * var(--u)); }
+.shell-nav a:hover { color: var(--amber); }

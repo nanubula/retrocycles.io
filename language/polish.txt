@@ -1124,8 +1124,6 @@ input_glance_right_help       Tymczasowo obraca kamere w prawo.
 input_glance_left_text        Spójrz w lewo
 input_glance_left_help        Tymczasowo obraca kamere w lewo.
 
-input_glance_forward_text     Glance w przód
-input_glance_forward_help     Tymczasowo obraca kamere do przodu.
 
 input_bank_down_text          Obróc w dól
 input_bank_down_help          Obraca kamere w dól lub przesuwa ja do góry, jesli jej kierunek jest staly.
@@ -3031,7 +3029,7 @@ sound_playlist_text           Lista Odtwarzania.
 persp_correct_help            Aktywuj korekcje perspektywy
 dead_console_decoration       *MARTWY*  
 screen_vsync_on_text          Czekaj
-input_glance_forward_text     Glance w przód
+input_glance_forward_text     Spójrz w przód
 input_joy_down_help           Kaze cyklowi jechac w dól wzgledem aktualnego widoku
 sound_playlistcustom_help     Uzyj wlasnej listy odtwarzania
 pref_explosion_hud_text       Eksplozje (minimapa):

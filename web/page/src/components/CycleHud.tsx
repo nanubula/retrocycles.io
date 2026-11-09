@@ -5,7 +5,8 @@
 // half, red near the end (a blend between the state colours where the browser mixes colours, the
 // tiers otherwise); the brakes under it (bright while braking, amber and EMPTY when nearly out), the
 // speed last and quietest; from half the rubber used on, the screen's edges warm, amber and then red,
-// so a player grinding a wall sees it without looking down. The brake bar only
+// so a player grinding a wall sees it without looking down, unless the player
+// turned that glow off (Settings > HUD, settings/hudStyle.ts useRubberGlow). The brake bar only
 // where there is a brake to press: not with touch buttons that have no brake key, nor in Discord on a
 // phone; the speed stays. Read from
 // aa.getCycle() (the cycle the camera follows) on animation frames, drawn at most every 50 ms;
@@ -13,6 +14,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import type { Aa, AaCycle } from "../aa/types";
 import { num, t } from "../i18n";
+import { useRubberGlow } from "../settings/hudStyle";
 
 const DRAW_MS = 50;
 
@@ -52,6 +54,7 @@ function units(v: number): string {
 
 export function CycleHud({ aa, brakes = true }: { aa: Aa; brakes?: boolean }) {
   const [cycle, setCycle] = useState<AaCycle | null>(null);
+  const glowOn = useRubberGlow();
 
   useEffect(() => {
     let frame = 0;
@@ -87,7 +90,7 @@ export function CycleHud({ aa, brakes = true }: { aa: Aa; brakes?: boolean }) {
   return (
     <div className="cyclehud" id="cycle-hud" data-tier={tier} data-brake={brakeState} data-brakes={brakes ? undefined : "none"} aria-hidden="true"
       style={{ "--meter-mix": meterMix(left) } as CSSProperties}>
-      {heat > 0 && (
+      {glowOn && heat > 0 && (
         <div
           className="hud-edge"
           style={{ boxShadow: `inset 0 0 ${Math.round(40 + 60 * heat)}px ${Math.round(4 + 20 * heat)}px rgba(${glow}, ${(0.15 + 0.4 * heat).toFixed(2)})` }}

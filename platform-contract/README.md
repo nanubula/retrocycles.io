@@ -122,8 +122,10 @@ Guest handles are `g-` followed by 8 lowercase hex digits.
 
 `200` with the user shape, or `401` without a session. With `features.progression` the user shape
 also carries `progression` (see "Progression"); with `features.moveOffers`, when the platform offers
-the player a closer server, `moveOffer` (see "Offers"). `?p=<page session>` (optional): the page
-load it is for (see `GET /v1/platform/config`).
+the player a closer server, `moveOffer` (see "Offers"). `inviteCode` (optional, `[a-z0-9_-]{1,32}`):
+the player's own code, random and kept per player; the page's INVITE link carries it as `?l=` beside
+`?c=invite`, so a visit that link brings counts for the player who sent it. `?p=<page session>`
+(optional): the page load it is for (see `GET /v1/platform/config`).
 
 ### Accounts
 
@@ -471,6 +473,24 @@ it makes one (a handle from the username, the name from the display name, no ema
 `sessionToken` is the bearer session (section 1); it slides like the cookie (a day, renewed when
 less than half is left) and shows in the sessions list as a Discord Activity. Errors: `400`
 `bad_code` (Discord refused the code), `404` `discord_not_configured`, `503` `discord_unavailable`.
+
+### `GET /v1/me/config`, `PUT /v1/me/config`
+
+A registered account's saved settings: one text per account, so the page can carry a player's
+settings to another device. The page decides what goes in (its allowlist of `user.cfg` lines and `rc.*`
+page preferences) and applies only allowlisted lines when it reads the text back; the platform never reads
+its meaning. Session cookie or bearer; accounts only (`403` for a guest, `401` signed out).
+
+- `GET`: `200 {text, version, updatedAt}` with `ETag: "<version>"` and `Cache-Control: no-store`. Nothing saved
+  yet: `{text: "", version: 0, updatedAt: null}`, `ETag: "0"`.
+- `PUT {"text": "..."}` (JSON): the CSRF header (`X-RC-CSRF: 1`; a bearer session needs none) and
+  `If-Match: "<version>"`, the version it replaces (`"0"`: none saved yet). `200 {version, updatedAt}` with the
+  new ETag. `428` `if_match_required` without `If-Match`, `400` `bad_if_match`, `409` `version_conflict` with the
+  current `version` (and its ETag) when another save came first: the page reads again, merges and retries once.
+- Checks, and nothing else: at most 256 KB of UTF-8 (`413`), valid UTF-8 (`400` `not_utf8`), and no line whose
+  first word starts with `PASSWORD` in any case (`400` `password_line`). Saves are rate limited per account.
+- The page reads once per sign-in and saves about 5 s after the last change that altered what it syncs, and
+  when the tab is hidden (`keepalive`). No polling.
 
 ### `GET /v1/me/stream`
 
@@ -940,7 +960,7 @@ attempts of a page session, 1, 2, ...):
 
 | `name` | `props` | when |
 |---|---|---|
-| `page_view` | `device` (`phone`/`tablet`/`desktop`), `browser`? (`chrome`/`firefox`/`safari`/`edge`/`other`), `campaign`? (`[a-z0-9_-]{1,32}`, the page's `?c=`), `link`? (`[a-z0-9_-]{1,32}`, the page's `?l=` beside a campaign: the link a creator's `/c/<name>` forwarded from), `referrer`? (the referring page's origin, `https?://host[:port]`, only for another site), `utmSource`? `utmMedium`? `utmCampaign`? (the link's `utm_` parameters, lower case with blanks as `-`, `[a-z0-9][a-z0-9._-]{0,63}`; anything else is left out), `embed`? (`true`: the page inside a social post's frame, `/?embed`), `discord`? (`true`: inside a Discord Activity; then no `embed`) | the page loaded |
+| `page_view` | `device` (`phone`/`tablet`/`desktop`), `browser`? (`chrome`/`firefox`/`safari`/`edge`/`other`), `campaign`? (`[a-z0-9_-]{1,32}`, the page's `?c=`), `link`? (`[a-z0-9_-]{1,32}`, the page's `?l=` beside a campaign: the link a creator's `/c/<name>` forwarded from), `referrer`? (the referring page's origin, `https?://host[:port]`, only for another site), `utmSource`? `utmMedium`? `utmCampaign`? `utmContent`? `utmTerm`? (the link's `utm_` parameters, lower case with blanks as `-`, `[a-z0-9][a-z0-9._-]{0,63}`; anything else is left out), `path`? (the path the page loaded at, lower case, `/[a-z0-9/._-]{0,63}` without `..` or `//`; never its query), `embed`? (`true`: the page inside a social post's frame, `/?embed`), `discord`? (`true`: inside a Discord Activity; then no `embed`) | the page loaded |
 | `play_pressed` | `mode` (`quick`/`browser`/`local`/`ranked`), `attempt`? (Quick Play and the server browser), `transport`? (`websocket`: this connect goes over the signalling WebSocket because WebRTC failed earlier on this tab; absent: WebRTC, and in Discord) | the player pressed Play in a mode (the server browser: chose a server) |
 | `bundle_loaded` | `ms` (since the page's navigation start), `ok`? | the game client is ready (or failed to load) |
 | `scene_ready` | `ms` (since navigation start) | the attract scene is first on screen (the backdrop the page shows while the player chooses) |

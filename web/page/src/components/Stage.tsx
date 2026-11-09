@@ -8,7 +8,7 @@
 import { useEffect, useLayoutEffect, useRef, type Ref } from "react";
 import type { SessionState, ServerEntry } from "../aa/types";
 import type { HintItem } from "../keys";
-import { modeInfo, type Mode } from "../modes";
+import { isQuick, modeInfo, type Mode } from "../modes";
 import type { FindingPhase } from "../platform/quickplay";
 import { Connecting } from "./Connecting";
 import { docHref } from "./Docs";
@@ -52,8 +52,10 @@ interface StageProps {
   boardsRef: Ref<LeaderboardsHandle>;
   youColor: string | null; // the player's cycle colour, for their row on the Leaderboards page
   onSaveProgress(): void;
-  onQuickPlay(): void;
+  onQuickPlay(board: string | null): void; // a board's PLAY: Quick Play in that board's mode
 
+  boardsStart?: string | null; // the board the Leaderboards page opens on (the last one played or chosen)
+  onBoardsBoard?(id: string): void; // a board chosen on the Leaderboards page
   onRefreshServers(): void;
   onJoinServer(entry: ServerEntry, spectate: boolean): void;
   onBack(): void;
@@ -69,7 +71,7 @@ export function Stage(props: StageProps) {
   // the connecting screen: Quick Play, a board's connect under way (until the first round shows:
   // `playing` before it is still the stage, App.tsx), the local game starting
   const boardConnect = mode === "browser" && (session === "connecting" || session === "syncing" || session === "fetching" || session === "playing");
-  const connect = !ban && (mode === "quick" || mode === "custom" || mode === "local" || boardConnect);
+  const connect = !ban && (isQuick(mode) || mode === "custom" || mode === "local" || boardConnect);
   // the Server Browser's own page (no head: its plate says SERVERS)
   const board = !ban && mode === "browser" && !boardConnect;
   // the Leaderboards page, in the same frame
@@ -106,7 +108,7 @@ export function Stage(props: StageProps) {
           kind={mode === "local" ? "local" : "connect"}
           session={session}
           resource={resource}
-          finding={mode === "quick" || mode === "custom" ? finding : null}
+          finding={isQuick(mode) || mode === "custom" ? finding : null}
           sub={mode === "local" ? "" : sub}
           keys={keys}
           duel={mode === "custom"}
@@ -135,7 +137,7 @@ export function Stage(props: StageProps) {
         />
       )}
 
-      {boards && <Leaderboards ref={props.boardsRef} open={open} youColor={props.youColor} onBack={props.onBack} onSave={props.onSaveProgress} onPlay={props.onQuickPlay} />}
+      {boards && <Leaderboards ref={props.boardsRef} open={open} youColor={props.youColor} onBack={props.onBack} onSave={props.onSaveProgress} onPlay={props.onQuickPlay} start={props.boardsStart ?? null} onBoard={props.onBoardsBoard} />}
 
       <div className="stage-body">
         {ban && <BanPane text={ban} />}

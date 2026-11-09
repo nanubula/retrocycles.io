@@ -3026,7 +3026,7 @@ sound_playlist_text           Lista Odtwarzania.
 persp_correct_help            Aktywuj korekcje perspektywy
 dead_console_decoration       *MARTWY*  
 screen_vsync_on_text          Czekaj
-input_glance_forward_text     Glance w przod
+input_glance_forward_text     Spojrz w przod
 input_joy_down_help           Kaze cyklowi jechac w dol wzgledem aktualnego widoku
 sound_playlistcustom_help     Uzyj wlasnej listy odtwarzania
 pref_explosion_hud_text       Eksplozje (minimapa):

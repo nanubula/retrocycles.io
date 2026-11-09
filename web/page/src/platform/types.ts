@@ -66,6 +66,7 @@ export interface PlatformUser {
   isGuest: boolean;
   progression?: Progression; // GET /v1/me with features.progression (platform/progression.ts keeps it)
   moveOffer?: MoveOffer; // GET /v1/me with features.moveOffers, when a closer server is offered (platform/offers.ts)
+  inviteCode?: string; // GET /v1/me: the player's invite code, ?l= on their INVITE link (platform/session.ts myInviteCode)
 }
 
 // ---- offers of a closer server (contract section 1, "Offers")
@@ -317,6 +318,8 @@ export interface QuickPlayAnswer {
   region: string;
   reservationId: string;
   expiresAt: number; // Unix seconds
+  mode?: string; // the room's Quick Play mode ("qp-ffa", "qp-fort"); absent on an older platform
+  board?: string | null; // the room's leaderboard ("deathmatch", "fortress"); null: none; absent: not said
 }
 
 // POST /v1/private-rooms and .../{code}/join: a private 1v1 room and one way in
@@ -381,6 +384,9 @@ export interface LiveAnswer {
   players: number;
   rooms: number;
   minShown: number; // the page shows "N playing" from this many on
+  // the people per Quick Play mode ("qp-ffa", "qp-fort"): every mode the platform runs, at 0 when
+  // nobody plays it; absent on an older platform
+  modes?: Record<string, number>;
 }
 
 // POST /v1/auth/game-token: 60 s, single use, for one server. Never stored or logged.
@@ -406,11 +412,14 @@ export interface MatchTally {
   match: number;
   startedAt: string;
   ended: boolean;
+  board?: string | null; // the room's leaderboard; null: none; absent: an older platform
   players: { name: string; kills: number; deaths: number }[];
 }
 
 export type BoardWindow = "today" | "week" | "all-time";
-export type BoardSort = "kills" | "kd" | "wins";
+// rounds: round wins (the fortress board's); wins: match wins; winpct: the share of counted
+// matches won
+export type BoardSort = "rounds" | "kills" | "kd" | "wins" | "winpct";
 
 // one row of a board; move: places gained since the snapshot (negative: lost), null with new
 export interface BoardRow {
@@ -421,6 +430,12 @@ export interface BoardRow {
   deaths: number;
   kd: number;
   wins: number;
+  rounds?: number; // round wins (absent on an older platform)
+  // counted matches (played at least half of; on deathmatch a won match always counts) and the
+  // share of them won, 0-100 with one decimal, null with no counted match (both absent on an
+  // older platform)
+  matches?: number;
+  winPct?: number | null;
   move: number | null;
   new: boolean;
   you: boolean;
@@ -440,12 +455,22 @@ export interface BoardPage {
   from: number;
   rows: BoardRow[];
   me: BoardRow | null;
+  // what the caller still needs to get on the board, in the sort's terms: kills, or in the win %
+  // sort counted matches; null when the sort asks nothing
   killsToQualify: number | null;
+}
+
+// a board the platform keeps; sorts: its own, its default first (absent on an older platform:
+// kills, K/D, wins)
+export interface BoardInfo {
+  id: string;
+  name: string;
+  sorts?: BoardSort[];
 }
 
 // GET /v1/leaderboards
 export interface BoardsInfo {
-  boards: { id: string; name: string }[];
+  boards: BoardInfo[];
   windows: { id: BoardWindow; resetsAt: string | null }[];
   sorts: BoardSort[];
 }
@@ -457,7 +482,9 @@ export interface MyPlace {
   new: boolean;
   killsToNext: number | null; // in the kills sort (the death note)
   next: string | null;
-  toNext: number | null; // what passing the one ahead takes in the sort's terms: kills, a K/D difference, wins
+  // what passing the one ahead takes in the sort's terms: round wins, kills, a K/D difference,
+  // wins, or in the win % sort wins in a row (null: no number of them would do it)
+  toNext: number | null;
 }
 
 export interface MyPlaces {

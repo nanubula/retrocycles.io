@@ -5,6 +5,7 @@ import type { home as En } from "../../en/home";
 export const home = {
   // ---- the play modes
   "home.mode.quick": "Schnellspiel",
+  "home.mode.fort": "Fortress",
   "home.mode.ranked": "Gewertet",
   "home.mode.browser": "Serverliste",
   "home.mode.leaderboards": "Bestenlisten",
@@ -17,7 +18,7 @@ export const home = {
   // ---- the note under the queue
   "home.note.noServer": "kein Server zum Verbinden: servers.json ist leer",
   "home.note.notLoaded": "der Client ist nicht geladen",
-  "home.note.inviteNotHere": "der eingeladene Raum ist nicht auf dieser Seite",
+  "home.note.inviteNotHere": "Diese Seite kann das Spiel, zu dem du eingeladen wurdest, nicht öffnen.",
   "home.note.finding": "Suche: {why}",
   "home.note.moving": "Umzug: {why}",
   "home.note.connectionLost": "Verbindung verloren",
@@ -65,7 +66,9 @@ export const home = {
   "home.embed.leaveFullscreen": "Vollbild beenden",
 
   // ---- the documents line
+  "home.say": "Ein kostenloses Multiplayer-Lightcycle-Spiel im Browser.",
   "home.docs.aria": "Über uns und Richtlinien",
+  "home.docs.howToPlay": "spielanleitung",
   "home.docs.about": "über",
   "home.docs.conduct": "Verhalten",
   "home.docs.privacy": "Datenschutz",

@@ -27,6 +27,7 @@ import { Settings as SettingsSheet, type SettingsHandle, type SettingsPreview } 
 import { SettingsCell } from "./components/SettingsCell";
 import type { TabId } from "./settings/schema";
 import { useSettingsStore } from "./settings/store";
+import { useConfigSync } from "./settings/useConfigSync";
 import { swatch, type CardSocial, type GameMenuHandle } from "./components/GameMenu";
 import { Stage, type StageBox } from "./components/Stage";
 import type { ServerBrowserHandle } from "./components/ServerBrowser";
@@ -47,9 +48,9 @@ import type { ChatSocial } from "./chat/useChat";
 import { focusableIn, isTextField, moveFocus, wouldWrap } from "./keyboard";
 import { HINT_ACTIONS, dropMouseCamera, embedKeys, hintItems, moveOffOldDefaults, type HintItem } from "./keys";
 import { embedSoundOff } from "./embedSound";
-import { MODES, modeIndex, setPrivateRooms, type Mode } from "./modes";
+import { MODES, isQuick, modeForBoard, modeIndex, quickModeId, setFortress, setPrivateRooms, type Mode } from "./modes";
 import { discordJoinable, invitedServer, loadServers, serverCode, signalUrl } from "./servers";
-import { Banned, banText, iceOptionsFor, loginTokenFor, platformState, refreshPlatformUser } from "./platform/session";
+import { Banned, banText, iceOptionsFor, loginTokenFor, myInviteCode, platformState, refreshPlatformUser } from "./platform/session";
 import { noteWebRtcBlocked, noteWebRtcWorked, webRtcBlocked } from "./platform/webrtcFallback";
 import { NOTE_MAX, REASONS, reportsOffered, sendReport, type ReasonId, type ReportResult, type ReportTarget, type RoomLine } from "./platform/reports";
 import type { ChatEntry } from "./chat/sort";
@@ -78,8 +79,8 @@ import { RespawnCountdown } from "./components/RespawnCountdown";
 import { DeathNote } from "./components/DeathNote";
 import type { LeaderboardsHandle } from "./components/Leaderboards";
 import { SCORE_TABS, Scoreboard, type ScoreTab } from "./components/Scoreboard";
-import { leaderboardsOn, readMyPlaces, useBoardList, useLeaderboardBaseline, useMatchTally } from "./platform/leaderboards";
-import type { BoardSort, MyPlace } from "./platform/types";
+import { boardSorts, leaderboardsOn, readLastBoard, readMyPlaces, saveLastBoard, useBoardList, useBoardSorts, useLeaderboardBaseline, useMatchTally, useRoomBoard } from "./platform/leaderboards";
+import type { MyPlace } from "./platform/types";
 import { onScoreKey } from "./scoreKeys";
 import { TouchControls } from "./components/TouchControls";
 import { MenuCell } from "./components/MenuCell";
@@ -146,6 +147,8 @@ export function App() {
   const discord = useDiscord();
   // the Settings sheet edits the game config itself (settings/store.ts)
   const settingsStore = useSettingsStore(aa);
+  // a registered player's settings follow the account (settings/configSync.ts); guests and signed-out players stay local
+  useConfigSync(aa, phase === "ready", platform.mode === "platform" ? platform.apiUrl : null, platform.mode === "platform" ? platform.user : null, settingsStore);
   // the account's event stream (messages, friend changes) and the unread count
   useEventStream();
   const unreadMessages = useUnread();
@@ -164,8 +167,8 @@ export function App() {
   const [boardList, setBoardList] = useState<ServerEntry[] | null>(null);
   const browserRef = useRef<ServerBrowserHandle>(null);
   const boardsRef = useRef<LeaderboardsHandle>(null);
-  // the Leaderboards page's PLAY: Quick Play once its stage has closed
-  const [quickNext, setQuickNext] = useState(false);
+  // the Leaderboards page's PLAY: Quick Play (the board's own mode) once its stage has closed
+  const [quickNext, setQuickNext] = useState<Mode | null>(null);
   const [focused, setFocused] = useState(0);
   // the focused line's index, for a change of the list (modes.ts setPrivateRooms) outside a render
   const focusedRef = useRef(0);
@@ -221,6 +224,8 @@ export function App() {
   // the room the game runs in when it is an official one (platform login): its server id,
   // for reports (the platform attaches that room's chat)
   const [roomServerId, setRoomServerId] = useState<string | null>(null);
+  // the leaderboard Quick Play said the room counts on, by the room's server id
+  const [saidBoard, setSaidBoard] = useState<{ serverId: string; board: string | null } | null>(null);
   // a ban the platform answered a connect with (shown in the open stage), "" for none
   const [ban, setBan] = useState<string | null>(null);
   // the server id of the room the game runs in, official or not: the invite link's room
@@ -241,8 +246,8 @@ export function App() {
   const [homeHint, setHomeHint] = useState(() => !EMBED && iphoneSafari() && !standalone() && !homeScreenHintSeen());
   // Google Analytics' cookie question (googleTag.ts), in the hint's place while it is up
   const cookieBanner = useCookieBanner();
-  // how many play now (GET /v1/live), null when the page does not say
-  const [live, setLive] = useState<number | null>(null);
+  // how many play now (GET /v1/live), by menu line: Quick Play's and Fortress's own modes
+  const [live, setLive] = useState<Partial<Record<Mode, number | null>>>({});
   // the keys line at the start of the first games (KeysLine.tsx)
   const [keysLine, setKeysLine] = useState<HintItem[] | null>(null);
   // the Training screen over the paused local game (components/Training.tsx)
@@ -314,7 +319,7 @@ export function App() {
   // a Quick Play pick (not an invite, a friend's room or a server of the browser): the rooms
   // that did not answer so far, which the next ask avoids; the seat's room; and whether the
   // page itself ended a connect whose signalling never answered
-  const reroute = useRef<{ avoid: string[]; tries: number } | null>(null);
+  const reroute = useRef<{ avoid: string[]; tries: number; mode: Mode } | null>(null);
   const seatRoom = useRef<string | null>(null);
   const stalled = useRef(false);
   // usage events (platform/analytics.ts; nothing is sent without a platform): the connect
@@ -344,6 +349,19 @@ export function App() {
 
   const real: SessionState = state ? state.state : "idle";
   const session: SessionState = real;
+  // the player's invite code on the room's INVITE link (platform/session.ts myInviteCode), asked once a
+  // network game is on; the link works without it
+  const [myInvite, setMyInvite] = useState<string | null>(null);
+  useEffect(() => {
+    if (real !== "playing" || !gameCode) return;
+    let live = true;
+    void myInviteCode().then((code) => {
+      if (live) setMyInvite(code);
+    });
+    return () => {
+      live = false;
+    };
+  }, [real, gameCode]);
   // a network game shows once there is something to see: `playing` comes while the canvas is
   // still black (a room that was empty wakes up and builds the round, then the client syncs
   // to it, "Syncing with server..."), so the connecting screen stays up until the session's
@@ -454,7 +472,7 @@ export function App() {
   const startAttempt = useCallback(
     (mode: ConnectMode, viaSocket = mode === "quick" && webRtcBlocked() && !WEBSOCKET_TRANSPORT) => {
       attempt.current?.fail("cancelled"); // an earlier one that never ended
-      if (mode !== "quick") reroute.current = null; // a server of the browser is that one server
+      if (mode !== "quick") reroute.current = null; // a server of the browser is that one server (analytics' "quick" is any Quick Play mode)
       pressed();
       playRegion.current = null;
       const a = new ConnectAttempt(mode, viaSocket ? "websocket" : undefined);
@@ -598,21 +616,32 @@ export function App() {
   // room (retrying while every room is full, about a minute), then the usual connect;
   // otherwise (community mode) the first servers.json entry, as before. An invite link's
   // `room`: the servers.json entry with that server id, else a seat in exactly that room
-  // through the platform; a room neither knows is a note under the queue
-  const quickPlay = useCallback((target: JoinTarget | null = null, again: { avoid: string[]; tries: number } | null = null) => {
+  // through the platform; a room neither knows is a note under the queue. `line`: the menu line
+  // pressed, Quick Play or one of its modes (Fortress); a reroute keeps its mode
+  const quickPlay = useCallback((target: JoinTarget | null = null, again: { avoid: string[]; tries: number; mode: Mode } | null = null, line: Mode = "quick") => {
     const room = target && "room" in target ? target.room : null;
     // only a pick may go to another room: an invite or a friend's room is that one room
-    reroute.current = target ? null : again ?? { avoid: [], tries: 0 };
+    reroute.current = target ? null : again ?? { avoid: [], tries: 0, mode: line };
+    const qm = target ? "quick" : reroute.current?.mode ?? line;
     // a friend's room watched rather than played: the spectator switch for that game (connect)
     spectateNext.current = !!target && "friend" in target && target.spectate;
     const seq = ++connectSeq.current;
-    const i = modeIndex("quick");
+    const i = Math.max(0, modeIndex(qm));
     const a = startAttempt("quick");
     // a Discord launch starts before its sign-in is through: that is the first step shown
     if (DISCORD && platformState().mode === "loading") setFinding({ phase: "signing" });
-    quickPlayEnabled().then((enabled) => {
+    quickPlayEnabled().then(async (enabled) => {
       if (seq !== connectSeq.current) return;
-      const listed = room ? invitedServer(servers, room) : undefined;
+      let listed = room ? invitedServer(servers, room) : undefined;
+      let asked = target;
+      // a code from the Server Browser: servers.json holds only part of the board. A room of ours
+      // takes a seat through the platform, which knows it by its id; any other server is joined
+      if (room && !listed) {
+        const onBoard = invitedServer((await platformServers()) ?? [], room);
+        if (seq !== connectSeq.current) return;
+        if (onBoard?.serverId) asked = { room: onBoard.serverId };
+        else listed = onBoard;
+      }
       if (listed) {
         connect(listed);
         return;
@@ -636,7 +665,7 @@ export function App() {
         if (phase.phase === "asking") a.quickTry();
         if (phase.phase === "waiting" && phase.full) a.quickNoRoom();
         if (seq === connectSeq.current) setFinding(phase);
-      }, target, reroute.current?.avoid ?? [])
+      }, asked, reroute.current?.avoid ?? [], quickModeId(qm))
         .then((found) => {
           if (!found) return; // backed out
           if (seq !== connectSeq.current) {
@@ -646,6 +675,8 @@ export function App() {
           findAbort.current = null;
           seat.current = found.reservationId;
           seatRoom.current = found.server.serverId ?? null;
+          const sid = found.server.serverId;
+          setSaidBoard(sid && found.board !== undefined ? { serverId: sid, board: found.board } : null);
           setQuickRoom(found.roomId);
           a.quickResult("assigned", found.region);
           playRegion.current = found.region;
@@ -828,7 +859,7 @@ export function App() {
       if (i < 0) return; // a mode out of the queue (Ranked)
       noteAction("menu-" + m);
       // a phone or tablet goes full screen where its browser allows (fullscreen.ts; from the press)
-      if ((m === "quick" || m === "browser" || m === "local" || m === "custom")) fullscreenOnPlay();
+      if (isQuick(m) || m === "browser" || m === "local" || m === "custom") fullscreenOnPlay();
       const tile = stripRef.current?.children[i] as HTMLElement | undefined;
       if (tile) {
         // where the line sits now: the stage title travels from here (Stage.tsx)
@@ -842,7 +873,7 @@ export function App() {
       playScene(MODES[i].scene);
       requestAnimationFrame(() => requestAnimationFrame(() => setStageOpen(true)));
 
-      if (m === "quick") quickPlay(room);
+      if (isQuick(m)) quickPlay(m === "quick" ? room : null, null, m);
       // the private 1v1 sumo room: a new one, or the invite link's
       if (m === "custom") {
         track("play_pressed", { mode: "quick" });
@@ -873,8 +904,8 @@ export function App() {
 
   useEffect(() => {
     if (!quickNext || mode) return;
-    setQuickNext(false);
-    select("quick");
+    setQuickNext(null);
+    select(quickNext);
   }, [quickNext, mode, select]);
 
   const collapse = useCallback(() => {
@@ -1049,6 +1080,18 @@ export function App() {
     if (platform.mode === "loading") return;
     privateRoomsLine(privateRoomsEnabled());
   }, [platform, privateRoomsLine]);
+  // the Fortress line: there while GET /v1/live counts the fortress mode (livePlayers below);
+  // out without Quick Play through a platform
+  const fortressLine = useCallback((on: boolean) => {
+
+    const was = MODES[focusedRef.current]?.mode;
+    if (setFortress(on) < 0) return;
+    setModesVersion((v) => v + 1);
+    if (was) setFocused(Math.max(0, modeIndex(was)));
+  }, []);
+  useEffect(() => {
+    if (platform.mode === "community" || (platform.mode === "platform" && platform.config.features.quickplay !== true)) fortressLine(false);
+  }, [platform, fortressLine]);
 
   // a private room's invite link: into that room once the page and the platform are ready
   useEffect(() => {
@@ -1108,6 +1151,20 @@ export function App() {
   // server that asks for that id would get an answer it can try to crack
   useEffect(() => {
     if (phase === "ready" && aa) aa.setConfig("PASSWORD_STORAGE", "-1");
+  }, [phase, aa]);
+
+  // the smart camera always glances from the glance position: its own glance is rough, so
+  // Settings has no row for it, and a saved 0 from an older page is set back here
+  useEffect(() => {
+    if (phase === "ready" && aa) aa.setConfig("SMART_GLANCE_CUSTOM_1", "1");
+  }, [phase, aa]);
+
+  // SPECTATE turns the spectator switch on for one game and the disconnect turns it back. A tab
+  // closed or reloaded while watching keeps it on in the saved config, and every later JOIN or
+  // Quick Play then only watches ("Waiting for real players"). The page has no other way to turn
+  // it on, so each load starts as a player.
+  useEffect(() => {
+    if (phase === "ready" && aa && Number(aa.getConfig("SPECTATOR_MODE_1")?.value ?? 0) !== 0) aa.setConfig("SPECTATOR_MODE_1", "0");
   }, [phase, aa]);
 
   useEffect(() => {
@@ -1211,7 +1268,7 @@ export function App() {
       console.info("quickplay: " + seatRoom.current + " could not be reached (" + (wasStalled ? "no answer" : state.reason) + "), asking for another room");
       dropSeat(true);
       leaving.current = false;
-      quickPlay(null, { avoid, tries: again.tries + 1 });
+      quickPlay(null, { avoid, tries: again.tries + 1, mode: again.mode });
       return;
     }
     if (state.state === "disconnected") {
@@ -2192,7 +2249,7 @@ export function App() {
   // the connecting screen covers the home screen until the room starts a round (a Quick Play into a
   // round already running waits for its end): an arrival, a challenge or my open invite stands over
   // it at the same corner (on the way to the duel itself the screen says it already)
-  const duelOverStage = !!homeDuel && stageOpen && (mode === "quick" || mode === "custom") && duelLine?.kind !== "moving";
+  const duelOverStage = !!homeDuel && stageOpen && (isQuick(mode) || mode === "custom") && duelLine?.kind !== "moving";
   const menuDuel = incomingDuel
     ? {
         from: incomingDuel.from.name,
@@ -2265,7 +2322,6 @@ export function App() {
   // show on MATCH; with the platform's leaderboards, TODAY, THIS WEEK and ALL TIME after it
   const boardsLive = leaderboardsOn(platform);
   const [scoreTab, setScoreTab] = useState<ScoreTab>("match");
-  const [scoreSort, setScoreSort] = useState<BoardSort>("kills");
   const [scoreBoard, setScoreBoard] = useState<string | null>(null);
   const scoresUp = inGame && scores.shown && !menuOpen && !profile && !authUp && !sheetUp;
   useEffect(() => {
@@ -2274,9 +2330,29 @@ export function App() {
 
   const leaderboardList = useBoardList(boardsLive && inGame);
   const scoreBoards = boardsLive && platform.mode === "platform" && !!platform.user ? leaderboardList : [];
+  // the room's board: what Quick Play said, else the room's match; the window, the death
+  // note and the match summary read it, and the Leaderboards page opens on the last one (or the
+  // last one chosen there), kept over reloads
+  const roomBoard = useRoomBoard(roomServerId, saidBoard && saidBoard.serverId === roomServerId ? saidBoard.board : undefined);
+  const [lastBoard, setLastBoard] = useState<string | null>(readLastBoard);
+  const keepBoard = useCallback((board: string) => {
+    setLastBoard(board);
+    saveLastBoard(board);
+  }, []);
+  useEffect(() => {
+    if (roomBoard) keepBoard(roomBoard);
+  }, [roomBoard, keepBoard]);
+  // a new room opens the window on its own board
+  useEffect(() => setScoreBoard(null), [roomServerId]);
+  const [sortOf, chooseSort] = useBoardSorts(leaderboardList);
+  const scoreBoardId = scoreBoard ?? (roomBoard && scoreBoards.some((b) => b.id === roomBoard) ? roomBoard : scoreBoards[0]?.id ?? null);
+  const scoreSort = sortOf(scoreBoardId);
+  // what the death note and the match summary read: the room's board in its own default sort
+  const placesBoard = roomBoard && leaderboardList.some((b) => b.id === roomBoard) ? roomBoard : undefined;
+  const placesSort = placesBoard ? boardSorts(leaderboardList.find((b) => b.id === placesBoard))[0] : undefined;
   const tally = useMatchTally(roomServerId, scoresUp && scoreTab === "match");
   // the places the first death note compares with: read when an official game starts
-  useLeaderboardBaseline(boardsLive && real === "playing" && !!roomServerId);
+  useLeaderboardBaseline(boardsLive && real === "playing" && !!roomServerId, placesBoard, placesSort);
   // Shift with the SCORE key: the next tab (scoreKeys.ts keeps that press from the game)
   useEffect(() => {
     if (!scoresUp || !scoreBoards.length) return onScoreKey(null);
@@ -2363,14 +2439,21 @@ export function App() {
   useEffect(() => {
     if (platform.mode !== "platform" || inGame) return;
     let gone = false;
-    const ask = () => void livePlayers().then((n) => !gone && setLive(n));
+    const ask = () =>
+      void livePlayers().then((n) => {
+        if (gone || !n) return;
+        // an older platform counts everyone as Quick Play's; a newer one each mode apart: Quick Play is
+        // everyone outside the fortress rooms (its test room's players are Quick Play's too)
+        setLive(n.modes ? { quick: n.players === null ? null : Math.max(0, n.players - (n.modes["qp-fort"] ?? 0)), fort: n.modes["qp-fort"] ?? null } : { quick: n.players });
+        fortressLine(!!n.modes && "qp-fort" in n.modes);
+      });
     ask();
     const t = window.setInterval(ask, 30000);
     return () => {
       gone = true;
       window.clearInterval(t);
     };
-  }, [platform.mode, inGame]);
+  }, [platform.mode, inGame, fortressLine]);
 
   // the stage keeps rendering its body while it shrinks back into the tile (380 ms)
   useEffect(() => {
@@ -2676,7 +2759,7 @@ export function App() {
     setSummaryPlace(null);
     if (!summary || !boardsLive) return;
     let gone = false;
-    void readMyPlaces().then((p) => !gone && setSummaryPlace(p?.today ?? null));
+    void readMyPlaces(placesBoard, placesSort).then((p) => !gone && setSummaryPlace(p?.today ?? null));
     return () => {
       gone = true;
     };
@@ -3078,6 +3161,8 @@ export function App() {
 
         <Strip ref={stripRef} focused={focused} note={note} live={live} onFocusTile={focusTile} onSelect={(m) => select(m)} />
 
+        {/* what the game is, in words a reader (and a search engine) sees on the home screen */}
+        <p className="home-say" id="home-say">{t("home.say")}</p>
         <DocsLine />
 
         {cookieBanner && !loading && !mode && !inGame && <CookieBanner />}
@@ -3130,14 +3215,15 @@ export function App() {
         directGateway={platform.mode === "platform" && platform.config.features.directConnect === true}
         boardsRef={boardsRef}
         youColor={aa ? playerColor(aa) : null}
-
+        boardsStart={lastBoard}
+        onBoardsBoard={keepBoard}
         onSaveProgress={() => {
           claimOpened("leaderboard");
           openProfile("signup");
         }}
-        onQuickPlay={() => {
+        onQuickPlay={(board) => {
           collapse();
-          setQuickNext(true);
+          setQuickNext(modeForBoard(board));
         }}
         onRefreshServers={refreshServers}
         onJoinServer={joinServer}
@@ -3252,7 +3338,7 @@ export function App() {
           players={players.length ? players : state?.players ?? []}
           canReport={canReport}
           level={myLevel}
-          invite={privateCode && session === "playing" ? privateRoomLink(privateCode) : gameCode && session === "playing" ? inviteLink(gameCode) : null}
+          invite={privateCode && session === "playing" ? privateRoomLink(privateCode) : gameCode && session === "playing" ? inviteLink(gameCode, myInvite, roomFrom?.entry.direct?.key ?? null) : null}
           onInvite={DISCORD && session === "playing" && !privateCode ? () => void discordInvite(gameCode) : null}
           onLeave={leaveGame}
           fullGame={EMBED ? fullPageLink("embed-menu") : null}
@@ -3271,7 +3357,7 @@ export function App() {
         >
           {pageMeters && aa && playingNow && !menuOpen && !profile && !authUp && !sheetUp && <CycleHud aa={aa} brakes={hudBrakes} />}
           {aa && playingNow && !menuOpen && !profile && !authUp && !sheetUp && <RespawnCountdown aa={aa} />}
-          {aa && boardsLive && real === "playing" && !!roomServerId && !menuOpen && !profile && !authUp && !sheetUp && <DeathNote aa={aa} />}
+          {aa && boardsLive && real === "playing" && !!roomServerId && !menuOpen && !profile && !authUp && !sheetUp && <DeathNote aa={aa} board={placesBoard} sort={placesSort} />}
 
           {scoresUp && (
             <Scoreboard
@@ -3282,11 +3368,12 @@ export function App() {
               roomName={stripColors(sessionName)}
               unverified={foreignRoom}
               boards={scoreBoards}
-              board={scoreBoard ?? scoreBoards[0]?.id ?? null}
+              board={scoreBoardId}
+
               youColor={aa ? playerColor(aa) : null}
               onBoard={setScoreBoard}
               sort={scoreSort}
-              onSort={setScoreSort}
+              onSort={(sort) => chooseSort(scoreBoardId, sort)}
               keyLabel={scoreKeyLabel}
               onSave={() => {
                 claimOpened("leaderboard");

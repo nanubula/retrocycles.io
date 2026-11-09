@@ -4,6 +4,7 @@ import type { home as En } from "../../en/home";
 
 export const home = {
   "home.mode.quick": "Szybka gra",
+  "home.mode.fort": "Fortress",
   "home.mode.ranked": "Rankingowa",
   "home.mode.browser": "Lista serwerów",
   "home.mode.leaderboards": "Rankingi",
@@ -15,7 +16,7 @@ export const home = {
 
   "home.note.noServer": "brak serwera do połączenia: servers.json jest pusty",
   "home.note.notLoaded": "klient nie jest wczytany",
-  "home.note.inviteNotHere": "pokoju z zaproszenia nie ma na tej stronie",
+  "home.note.inviteNotHere": "Ta strona nie może otworzyć gry, do której cię zaproszono.",
   "home.note.finding": "szukanie: {why}",
   "home.note.moving": "przenosiny: {why}",
   "home.note.connectionLost": "utracono połączenie",
@@ -63,7 +64,9 @@ export const home = {
   "home.embed.fullscreen": "Pełny ekran",
   "home.embed.leaveFullscreen": "Wyjdź z pełnego ekranu",
 
+  "home.say": "Darmowa gra wieloosobowa w świetlne motocykle w przeglądarce.",
   "home.docs.aria": "O grze i zasady",
+  "home.docs.howToPlay": "jak grać",
   "home.docs.about": "o grze",
   "home.docs.conduct": "zasady",
   "home.docs.privacy": "prywatność",

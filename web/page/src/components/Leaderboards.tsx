@@ -1,7 +1,9 @@
 // The Leaderboards page: the home menu's LEADERBOARDS lane, a full opaque page in the
 // Server Browser's frame (its BACK, plate, filter line and docked details; servers.css), so it
-// reads as the same kind of place. TODAY, THIS WEEK, ALL TIME as tabs, the sort (kills, K/D, wins),
-// what the board is and what its arrows compare with, the board, and the focused row's details at
+// reads as the same kind of place. The boards (DEATHMATCH FORTRESS) and TODAY, THIS WEEK, ALL TIME
+// as tabs, the sort (the board's own: kills, K/D, wins, win % on deathmatch; round wins first on the
+// fortress board), what the board is and what its arrows compare with, a quiet line on
+// what the board counts, the board, and the focused row's details at
 // the right: its place and totals, and for the player's own row their places on all three boards,
 // the kills to pass the next one, and the one act (PLAY, or SAVE YOUR PROGRESS for a guest). On a
 // phone the details give way to the board and the player's own place stands in a bar at the foot.
@@ -17,8 +19,8 @@
 // top, End the bottom, Left/Right the tabs, Enter the focused row's act or a focused button; Esc is App's.
 import { Fragment, forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { BoardRow, BoardSort, BoardWindow, MyPlace, MyPlaces } from "../platform/types";
-import { leaderboardsOn, readMyPlaces, useBoardList, useBoardRows } from "../platform/leaderboards";
-import { BoardHead, BoardLine, BoardSkeleton, Move, PendingLine, Swatch, kdText, movementWords, resetsText } from "./BoardTable";
+import { boardColumns, boardSorts, leaderboardsOn, readMyPlaces, useBoardList, useBoardRows, useBoardSorts, type BoardColumn } from "../platform/leaderboards";
+import { BoardHead, BoardLine, BoardSkeleton, ModeSwitch, Move, PendingLine, Swatch, columnValue, columnWord, legendWords, movementWords, qualifyWords, resetsText, roundsBoard, toNextWords } from "./BoardTable";
 import { Icon } from "./Icons";
 import { num, t, type PlainKey } from "../i18n";
 
@@ -27,12 +29,15 @@ export interface LeaderboardsHandle {
   key(e: KeyboardEvent): boolean;
 }
 
+
 interface LeaderboardsProps {
   open: boolean;
   youColor: string | null; // the player's cycle colour (the page's own, before the platform knows it)
   onBack(): void;
   onSave(): void; // a guest's SAVE YOUR PROGRESS
-  onPlay(): void; // Quick Play
+  onPlay(board: string | null): void; // Quick Play, in the board's own mode
+  start?: string | null; // the board to open on (the last one played or chosen), else the first
+  onBoard?(id: string): void; // a board chosen here: the next opening starts on it
 }
 
 const WINDOWS: { id: BoardWindow; title: PlainKey; mine: "today" | "week" | "allTime" }[] = [
@@ -44,13 +49,30 @@ const WINDOWS: { id: BoardWindow; title: PlainKey; mine: "today" | "week" | "all
 const OVERDRAW = 12; // rows drawn past each edge of the view
 const ROW_GUESS = 50; // a row's height before one is measured
 
-export const Leaderboards = forwardRef<LeaderboardsHandle, LeaderboardsProps>(function Leaderboards({ open, youColor, onBack, onSave, onPlay }, ref) {
+export const Leaderboards = forwardRef<LeaderboardsHandle, LeaderboardsProps>(function Leaderboards({ open, youColor, onBack, onSave, onPlay, start, onBoard }, ref) {
   const live = leaderboardsOn();
   const boards = useBoardList(open && live);
+  // the board chosen here; each opening starts again on the last board played or chosen (start), else the first
   const [boardId, setBoardId] = useState<string | null>(null);
-  const board = boardId ?? boards[0]?.id ?? null;
+  // a board chosen here, said to a screen reader (the switch keeps the focus)
+  const [said, setSaid] = useState("");
+  useEffect(() => {
+    if (open) setBoardId(null);
+    setSaid("");
+  }, [open]);
+  const chooseBoard = (id: string) => {
+    setBoardId(id);
+    onBoard?.(id);
+    const name = boards.find((b) => b.id === id)?.name;
+    if (name) setSaid(t("connect.boards.showing", { name }));
+  };
+  const board = boardId ?? (start && boards.some((b) => b.id === start) ? start : boards[0]?.id ?? null);
+  const current = boards.find((b) => b.id === board);
+  const columns = boardColumns(boardSorts(current));
   const [window_, setWindow] = useState<BoardWindow>("today");
-  const [sort, setSort] = useState<BoardSort>("kills");
+  const [sortOf, chooseSort] = useBoardSorts(boards);
+  const sort = sortOf(board);
+  const setSort = (s: BoardSort) => chooseSort(board, s);
   const list = useBoardRows(board, window_, sort, open && live);
   const page = list.meta;
   const total = list.total;
@@ -142,7 +164,10 @@ export const Leaderboards = forwardRef<LeaderboardsHandle, LeaderboardsProps>(fu
     const h = bodyRef.current?.querySelector<HTMLElement>("tr[data-rank]")?.getBoundingClientRect().height;
     if (h && Math.abs(h - rowH) > 0.25) return setRowH(h);
     opened.current = key;
-    keyed.current = true;
+    // the row takes the focus, unless a board or window was just chosen on its switch: the focus
+    // stays there, so the arrows go on along it
+    const on = document.activeElement as HTMLElement | null;
+    keyed.current = !(on?.getAttribute("role") === "radio" && rootRef.current?.contains(on));
     const rank = page.me?.rank ?? 1;
     setFocus(rank);
     reveal(rank, page.me ? "center" : "top");
@@ -186,6 +211,7 @@ export const Leaderboards = forwardRef<LeaderboardsHandle, LeaderboardsProps>(fu
   }, [focus, page, range]);
 
   useEffect(() => {
+
     if (!open || !live) return;
     let gone = false;
     void readMyPlaces(board ?? undefined, sort).then((p) => !gone && setMine(p));
@@ -196,7 +222,8 @@ export const Leaderboards = forwardRef<LeaderboardsHandle, LeaderboardsProps>(fu
 
   const rowAt = (rank: number): BoardRow | undefined => (me && me.rank === rank ? me : list.row(rank));
   const focused = focus !== null ? rowAt(focus) ?? null : null;
-  const act = (row: BoardRow | null) => (row?.you ? (row.saved ? onPlay : onSave) : null);
+  const play = () => onPlay(board);
+  const act = (row: BoardRow | null) => (row?.you ? (row.saved ? play : onSave) : null);
   const toYou = () => {
     if (!me) return;
     setFocus(me.rank);
@@ -218,7 +245,7 @@ export const Leaderboards = forwardRef<LeaderboardsHandle, LeaderboardsProps>(fu
           target.click();
           return true;
         }
-        // Left/Right on a focused window or sort radio move within its own group
+        // Left/Right on a focused board or window radio move within its own group
         const group = target?.closest?.('[role="radiogroup"]');
         if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && group && rootRef.current?.contains(group)) {
           e.preventDefault();
@@ -291,7 +318,7 @@ export const Leaderboards = forwardRef<LeaderboardsHandle, LeaderboardsProps>(fu
   const lines: ReactNode[] = [];
   let next = 1;
   for (const rank of drawn) {
-    if (rank > next) lines.push(<Spacer key={"gap" + next} rows={rank - next} rowH={rowH} />);
+    if (rank > next) lines.push(<Spacer key={"gap" + next} rows={rank - next} rowH={rowH} cols={columns.length + 3} />);
     const row = rowAt(rank);
     // the player's own row, held at an edge: pressing it goes back to it
     const held = me?.rank === rank && stuck !== null;
@@ -299,19 +326,22 @@ export const Leaderboards = forwardRef<LeaderboardsHandle, LeaderboardsProps>(fu
     lines.push(
       <Fragment key={rank}>
         {row
-          ? BoardLine({ row, youColor, focused: focus, rowIndex: rank + 1, onRow: held ? toYou : (r) => setFocus(r.rank) })
-          : PendingLine({ rank, focused: focus, rowIndex: rank + 1, onRow: () => setFocus(rank) })}
+          ? BoardLine({ row, columns, sort, youColor, focused: focus, rowIndex: rank + 1, onRow: held ? toYou : (r) => setFocus(r.rank) })
+          : PendingLine({ rank, columns, focused: focus, rowIndex: rank + 1, onRow: () => setFocus(rank) })}
       </Fragment>
     );
     next = rank + 1;
   }
-  if (total && next <= total) lines.push(<Spacer key="gap-end" rows={total - next + 1} rowH={rowH} />);
+  if (total && next <= total) lines.push(<Spacer key="gap-end" rows={total - next + 1} rowH={rowH} cols={columns.length + 3} />);
 
   const resets = page ? resetsText(page.resetsAt) : null;
-  const current = boards.find((b) => b.id === board);
+  // nothing to read: the board's facts and its legend go, the failure line says it
+  const unavailable = !live || (failed && !page);
+  const legend = unavailable ? "" : legendWords(board, sort);
+  const qualify = page && !me ? qualifyWords(page, sort) : null;
   const myPlace = mine ? mine[WINDOWS.find((w) => w.id === window_)!.mine] : null;
   return (
-    <div className={"sb lb" + (me ? " has-you" : "")} id="leaderboards" ref={rootRef}>
+    <div className={"sb lb" + (me ? " has-you" : "")} id="leaderboards" data-board={board ?? undefined} ref={rootRef}>
       <button className="sb-home" type="button" aria-label={t("connect.browser.home")} tabIndex={-1} onClick={onBack} />
       <button className="sb-back" type="button" aria-keyshortcuts="Escape" onClick={onBack}>
         <Icon name="arrow-left" className="sb-back-icon" />
@@ -321,14 +351,6 @@ export const Leaderboards = forwardRef<LeaderboardsHandle, LeaderboardsProps>(fu
       <header className="sb-plate">
         <h2 className="sb-h">{t("connect.boards.title")}</h2>
         <div className="sb-tools">
-          {boards.length > 1 && current && (
-            <span className="sc-choice lb-mode">
-              <span className="sc-choice-key">{t("game.score.mode")}</span>
-              <button type="button" className="sc-chev" aria-label={t("game.score.modePrev")} onClick={() => setBoardId(boards[(boards.indexOf(current) + boards.length - 1) % boards.length].id)} />
-              <span className="sc-choice-value">{current.name}</span>
-              <button type="button" className="sc-chev is-next" aria-label={t("game.score.modeNext")} onClick={() => setBoardId(boards[(boards.indexOf(current) + 1) % boards.length].id)} />
-            </span>
-          )}
           <button className="sb-cell" type="button" disabled={!me} onClick={toYou}>
             {t("connect.boards.you")}
           </button>
@@ -338,8 +360,15 @@ export const Leaderboards = forwardRef<LeaderboardsHandle, LeaderboardsProps>(fu
         </div>
       </header>
 
-      <div className="sb-filters lb-filters" role="toolbar" aria-label={t("connect.boards.windows")}>
-        <div className="sb-scopes" role="radiogroup" aria-label={t("connect.boards.windows")}>
+      <div className="sb-filters lb-filters">
+        {/* the boards first, as the Server Browser's filters: what is shown, then for when */}
+        {boards.length > 1 && (
+          <>
+            <ModeSwitch boards={boards} board={board} onPick={chooseBoard} />
+            <span className="sb-sep lb-sep" aria-hidden="true" />
+          </>
+        )}
+        <div className="sb-scopes lb-windows" role="radiogroup" aria-label={t("connect.boards.windows")}>
           {WINDOWS.map((w) => (
             <button key={w.id} type="button" role="radio" aria-checked={window_ === w.id} tabIndex={window_ === w.id ? 0 : -1} className={"sb-tab" + (window_ === w.id ? " is-on" : "")} onClick={() => setWindow(w.id)}>
               {t(w.title)}
@@ -348,14 +377,20 @@ export const Leaderboards = forwardRef<LeaderboardsHandle, LeaderboardsProps>(fu
         </div>
         {/* what this board is and what its arrows say: the name first and heavier, then the facts */}
         <span className="lb-context">
-          <span className="lb-context-board">{current?.name ?? page?.boardName}</span>
-          <span className="lb-context-fact">{movementWords(window_)}</span>
+          {/* with the boards' switch on the line, the name is said there once */}
+          {boards.length < 2 && <span className="lb-context-board">{current?.name ?? page?.boardName}</span>}
+          {!unavailable && <span className="lb-context-fact">{movementWords(window_)}</span>}
           {resets && <span className="lb-context-fact lb-context-resets">{t("game.score.resetsIn", { time: resets })}</span>}
           {page && <span className="lb-context-fact">{t("game.score.ranked", { n: page.ranked })}</span>}
         </span>
       </div>
+      <span className="vh" role="status">
+        {said}
+      </span>
 
-      {(!live || (failed && !page)) && (
+      {legend && <p className="lb-legend">{legend}</p>}
+
+      {unavailable && (
         <p className="sb-fail lb-fail" role="alert">
           <span className="sb-fail-say">{live ? t("game.score.offline") : t("connect.boards.unavailable")}</span>
           {live && (
@@ -368,11 +403,11 @@ export const Leaderboards = forwardRef<LeaderboardsHandle, LeaderboardsProps>(fu
 
       <div className="sb-main">
         <section className={"sb-board lb-board" + (stuck ? " is-held-" + stuck : "")} aria-label={t("connect.boards.list")} ref={boxRef}>
-          {!page && live && !failed && <BoardSkeleton />}
+          {!page && live && !failed && <BoardSkeleton columns={columns} />}
           {page && total > 0 && (
-            <table className="bt" data-sort={page.sort} role="grid" aria-label={t("connect.boards.list")} aria-rowcount={total + 1}>
+            <table className="bt" data-sort={page.sort} data-cols={columns.length} role="grid" aria-label={t("connect.boards.list")} aria-rowcount={total + 1}>
               <thead ref={headRef}>
-                <BoardHead sort={page.sort} onSort={sortBy} keyHeads />
+                <BoardHead sort={page.sort} columns={columns} onSort={sortBy} keyHeads board={board} />
               </thead>
               <tbody ref={bodyRef}>{lines}</tbody>
             </table>
@@ -385,14 +420,10 @@ export const Leaderboards = forwardRef<LeaderboardsHandle, LeaderboardsProps>(fu
               </button>
             </p>
           )}
-          {page && !me && (page.killsToQualify !== null || !total) && (
+          {page && !me && (qualify || !total) && (
             <div className="lb-empty">
-              <p className="lb-say">
-                {!total
-                  ? t("game.score.empty")
-                  : t(sort === "kd" ? "game.score.qualifyKd" : "game.score.qualify", { n: page.killsToQualify ?? 1 })}
-              </p>
-              <button type="button" className="lb-line-act" onClick={onPlay}>
+              <p className="lb-say">{!total ? t("game.score.empty") : qualify}</p>
+              <button type="button" className="lb-line-act" onClick={play}>
                 {t("connect.boards.play")}
               </button>
             </div>
@@ -401,7 +432,7 @@ export const Leaderboards = forwardRef<LeaderboardsHandle, LeaderboardsProps>(fu
 
         <aside className="sb-detail lb-detail" aria-label={t("connect.boards.detail")}>
           {focused && (
-            <Detail row={focused} youColor={youColor} mine={focused.you ? mine : null} myPlace={focused.you ? myPlace : null} sort={sort} window={window_} onSave={onSave} onPlay={onPlay} />
+            <Detail row={focused} columns={roundsBoard(board) && !columns.includes("rounds") ? ["rounds", ...columns] : columns} youColor={youColor} mine={focused.you ? mine : null} myPlace={focused.you ? myPlace : null} sort={sort} window={window_} onSave={onSave} onPlay={play} />
           )}
         </aside>
       </div>
@@ -417,7 +448,7 @@ export const Leaderboards = forwardRef<LeaderboardsHandle, LeaderboardsProps>(fu
             </span>
             <span className={"lb-bar-mark" + (me.saved ? "" : " is-unsaved")}>{me.saved ? t("game.players.you") : t("game.score.notSaved")}</span>
           </span>
-          <button type="button" className="sb-join lb-bar-act" onClick={me.saved ? onPlay : onSave}>
+          <button type="button" className="sb-join lb-bar-act" onClick={me.saved ? play : onSave}>
             {me.saved ? t("connect.boards.play") : t("game.summary.save")}
           </button>
         </div>
@@ -427,16 +458,17 @@ export const Leaderboards = forwardRef<LeaderboardsHandle, LeaderboardsProps>(fu
 });
 
 // the places not drawn: one row as tall as they are
-function Spacer({ rows, rowH }: { rows: number; rowH: number }) {
+function Spacer({ rows, rowH, cols }: { rows: number; rowH: number; cols: number }) {
   return (
     <tr className="lb-spacer" aria-hidden="true">
-      <td colSpan={7} style={{ height: rows * rowH }} />
+      <td colSpan={cols} style={{ height: rows * rowH }} />
     </tr>
   );
 }
 
 interface DetailProps {
   row: BoardRow;
+  columns: readonly BoardColumn[];
   youColor: string | null;
   mine: MyPlaces | null;
   myPlace: MyPlace | null;
@@ -446,15 +478,7 @@ interface DetailProps {
   onPlay(): void;
 }
 
-// what passing the next player takes, in the sort's own terms
-function toNextWords(place: MyPlace, sort: BoardSort): string | null {
-  if (!place.next || place.toNext === null) return null;
-  if (sort === "kd") return t("game.note.toNextKd", { n: place.toNext, name: place.next });
-  if (sort === "wins") return t("game.note.toNextWins", { n: place.toNext, name: place.next });
-  return t("game.note.toNext", { n: place.toNext, name: place.next });
-}
-
-function Detail({ row, youColor, mine, myPlace, sort, window: w, onSave, onPlay }: DetailProps) {
+function Detail({ row, columns, youColor, mine, myPlace, sort, window: w, onSave, onPlay }: DetailProps) {
   const next = myPlace ? (myPlace.rank === 1 ? t("game.note.first") : toNextWords(myPlace, sort)) : null;
   return (
     <>
@@ -487,23 +511,17 @@ function Detail({ row, youColor, mine, myPlace, sort, window: w, onSave, onPlay 
           })}
         </div>
       )}
+      {/* the totals, in the board's own columns (round wins first on the fortress board, not a column there); win % with the counted matches it is of */}
       <dl className="lb-rows">
-        <div>
-          <dt>{t("game.score.kills")}</dt>
-          <dd>{num(row.kills)}</dd>
-        </div>
-        <div>
-          <dt>{t("game.score.deaths")}</dt>
-          <dd>{num(row.deaths)}</dd>
-        </div>
-        <div>
-          <dt>{t("game.score.kd")}</dt>
-          <dd>{kdText(row.kd)}</dd>
-        </div>
-        <div>
-          <dt>{t("game.score.wins")}</dt>
-          <dd>{num(row.wins)}</dd>
-        </div>
+        {columns.map((c) => (
+          <div key={c}>
+            <dt>{columnWord(c, columns)}</dt>
+            <dd>
+              {c === "winpct" && row.matches !== undefined && <span className="lb-rows-of">{t("game.score.matchesCounted", { n: row.matches })}</span>}
+              {columnValue(c, row)}
+            </dd>
+          </div>
+        ))}
       </dl>
       {row.you && !row.saved && (
         <>
