@@ -196,15 +196,88 @@ connections come from loopback (trusted, the forwarded address counts), the gate
 
 ## 6. Getting on the server list
 
-The Retrocycles server list shows official rooms and **trusted community servers** only; every
-other server is reachable by Direct Connect. There is no sign-up: we may invite servers that see
-regular players. A listed server has:
+The Retrocycles server list shows our own rooms and **moderated community servers**. Every other
+server is reachable by Direct Connect (section 4). A moderated server shows the **Moderated**
+badge on the list.
 
-- moderation on: a build with `--enable-platform` (the releases have it) and the defaults
-  `PLATFORM_CHAT_FILTER 1`, `PLATFORM_SANCTIONS 1`, `PLATFORM_REPORTS 1`, which its heartbeats
-  report, with a server key from Retrocycles;
-- a current version (section 7 keeps it current);
-- a named operator who signed the operator agreement.
+### What a moderated server gets
+
+- **Players find it.** It is on the server list, next to our rooms.
+- **Players arrive signed in.** Browser players join with their Retrocycles account, with no
+  password to type. The login token the page sends works only on your server, only once, and for
+  60 seconds.
+- **Moderation from us.** Chat is checked by our filter before other players see it. Our mutes and
+  bans apply on your server. Players can use `/report`, and our moderators handle the reports.
+- You keep your own rules, settings, admins, mutes and bans.
+
+Games on a community server do not count for XP, levels or leaderboards on Retrocycles.io.
+
+### What it needs
+
+- A release build (section 1), or a build of this source with `--enable-platform` and the
+  moderation code unchanged.
+- The moderation settings on. They are on by default:
+  `PLATFORM_CHAT_FILTER 1`, `PLATFORM_SANCTIONS 1`, `PLATFORM_REPORTS 1`.
+- A current release (see "Versions" below).
+- A named operator who accepts the
+  [operator agreement](https://retrocycles.io/operators/) and answers us.
+
+### How to apply
+
+You send one application for all your servers, and you get one **operator key**. The key works
+on all your servers. Each server has its own **server id**.
+
+1. Read the [operator agreement](https://retrocycles.io/operators/) and apply with the form
+   below it. You need a Retrocycles.io account. Give each server's address (`host:port`) and
+   name (up to 10 servers), your name and a contact you check (email or Discord). The page shows
+   the state of your application.
+2. We look at the servers. When we approve you, we send you your operator key and the settings
+   of each server. They look like this:
+
+   ```
+   PLATFORM_API_URL    https://api.retrocycles.io
+   PLATFORM_SERVER_ID  <this server's id>
+   PLATFORM_SERVER_KEY <your operator key>
+   PLATFORM_LOGIN      1
+   ```
+
+   The lines are the same on all your servers, except `PLATFORM_SERVER_ID`.
+3. Add the lines to `~/.armagetronad-dedicated/var/autoexec.cfg` (Docker:
+   `/data/var/autoexec.cfg`) and make the file readable only by the server's user:
+   `chmod 600 autoexec.cfg`. Then restart the server (`sudo systemctl restart retrocycles-server`,
+   or restart the container).
+4. At start the console says `Platform: reporting to https://api.retrocycles.io as server <id>`,
+   followed by `login tokens accepted, chat checked, sanctions on, reports on`. The server then
+   sends us a heartbeat every 10 seconds. When we see the heartbeats, we put the server on the
+   list.
+
+The operator key identifies your servers to us. Keep it secret: the server never writes it to the
+console or its logs. If someone else could know it, tell us. We send you a new one, and the old
+key stops working on all your servers.
+
+### More servers
+
+After we approve you, add more servers on the
+[operator agreement page](https://retrocycles.io/operators/#servers). Give the server's address
+and name. The page shows the new server's settings, with its own server id. Add your operator key
+(the same `PLATFORM_SERVER_KEY` line as on your other servers) and restart the server. It goes on
+the list when it sends heartbeats with the moderation settings on. You do not need a new
+application. The page also shows the state of each of your servers, and you can remove a server
+there.
+
+### Versions
+
+When we make a new release the minimum for moderated servers, you have **14 days** to update, or
+**3 days** for a security release. We tell you about each one. A server on an older release leaves
+the list until it updates. Auto-update (section 7) keeps you current without work:
+`sudo retrocycles-server auto-update on`. It installs a release only while nobody plays.
+
+### Leaving the list
+
+A server leaves the list by itself while its heartbeats stop, while a moderation setting is off,
+or while its release is too old. It comes back when the cause is gone. We may also take a server
+off the list, for example for breaking the agreement. To leave, tell us and remove the four
+`PLATFORM_*` lines.
 
 ## 7. Updating
 
