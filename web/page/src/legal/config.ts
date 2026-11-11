@@ -27,6 +27,11 @@ export interface LegalConfig {
   governingLaw: string | null; // e.g. "the laws of England and Wales" / "the State of New York, USA"
   effectiveDate: string | null; // e.g. "1 November 2026"
 
+  // the server operator agreement (/operators/, unlisted): its version, which an application
+  // names and the platform checks (its Operators:AgreementVersion), and the date it takes effect
+  operatorAgreementVersion: string;
+  operatorAgreementDate: string | null; // e.g. "1 December 2026"
+
   // the age policy (age page, terms, privacy, sign-up)
   minimumAge: number;
   // ask "I am <minimumAge> or older" at sign-up (a checkbox the form requires); off until
@@ -66,6 +71,9 @@ export const LEGAL: LegalConfig = {
   governingLaw: "the laws of the State of Wyoming, USA",
   effectiveDate: "17 October 2026",
 
+  operatorAgreementVersion: "1",
+  operatorAgreementDate: "10 November 2026",
+
   minimumAge: 13,
   requireAgeConfirmation: false,
 
@@ -91,6 +99,9 @@ export interface DocInfo {
   legal: boolean;
   // not built, linked or listed for now; its source stays for later
   hidden?: boolean;
+  // built and served, but not in the documents' navigation or the sitemap, and noindex: reached
+  // only from a link that names it (operators: the hosting guide)
+  unlisted?: boolean;
 }
 
 export const ALL_DOCS: DocInfo[] = [
@@ -101,8 +112,13 @@ export const ALL_DOCS: DocInfo[] = [
   { id: "conduct", title: "Code of conduct", legal: false },
   { id: "privacy", title: "Privacy", legal: true },
   { id: "terms", title: "Terms", legal: true },
-  { id: "age", title: "Age", legal: true }
+  { id: "age", title: "Age", legal: true },
+  // the agreement for operators of moderated community servers, with its Apply form
+  { id: "operators", title: "Server operators", legal: false, unlisted: true }
 ];
 
+// the documents the site builds
+export const BUILT_DOCS: DocInfo[] = ALL_DOCS.filter((d) => !d.hidden);
+
 // the documents the site builds, links and lists
-export const DOCS: DocInfo[] = ALL_DOCS.filter((d) => !d.hidden);
+export const DOCS: DocInfo[] = BUILT_DOCS.filter((d) => !d.unlisted);

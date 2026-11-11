@@ -1,4 +1,4 @@
-// The trust pages (about, code of conduct, privacy, terms, age) as static
+// The trust pages (about, code of conduct, privacy, terms, age, server operators) as static
 // documents: web/page/<doc>/index.html are extra Vite HTML entries (dist/<doc>/index.html,
 // served at /<doc>/), plain HTML and CSS, no script, no wasm. Before Vite processes them
 // this plugin fills them in from src/legal/config.ts and the build:
@@ -9,10 +9,14 @@
 //   <!--rc:foot-->          the documents' navigation and the licence / build line
 //   {{key}}                 a config or build value (escaped); missing -> a placeholder cell
 //   {{key:mail}}            an email value as a mailto link
+//   {{key:cap}}             a value that starts a sentence (its first letter capitalised)
 //   {{todo:words}}          always a placeholder cell: a decision the operator must make
 //   <!--rc:if flag-->A<!--rc:else-->B<!--rc:end-->   (flags: sourcePublic, repoWithStars,
 //                           repoWithoutStars, sourceOffer, sourceArchive, ageConfirmation,
 //                           commitKnown); not nested
+//
+// An `unlisted` document (src/legal/config.ts; operators) is built with noindex and stays out of
+// the navigation and the sitemap. One document has a script: operators, its Apply form.
 //
 // The document's id is its <body data-doc="...">. Anything left unfilled ({{ or <!--rc:)
 // fails the build. The licence texts (COPYING.txt, AUTHORS at the repository root) are
@@ -22,7 +26,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
-import { DOCS, LEGAL, type LegalConfig } from "../src/legal/config.ts";
+import { BUILT_DOCS, DOCS, LEGAL, type LegalConfig } from "../src/legal/config.ts";
 import { attr, site } from "./social.ts";
 
 const PAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -41,6 +45,7 @@ const LABELS: Partial<Record<keyof LegalConfig | string, string>> = {
   postalAddress: "postal address",
   governingLaw: "governing law and courts",
   effectiveDate: "effective date",
+  operatorAgreementDate: "effective date",
   emailProvider: "email provider",
   guestRetention: "guest retention period",
   auditRetention: "audit log retention period",
@@ -128,6 +133,8 @@ function values(facts: BuildFacts): Values {
     postalAddress: LEGAL.postalAddress,
     governingLaw: LEGAL.governingLaw,
     effectiveDate: LEGAL.effectiveDate,
+    operatorAgreementVersion: LEGAL.operatorAgreementVersion,
+    operatorAgreementDate: LEGAL.operatorAgreementDate,
     minimumAge: String(LEGAL.minimumAge),
     emailProvider: LEGAL.emailProvider,
     guestRetention: LEGAL.guestRetention,
@@ -169,6 +176,7 @@ function token(v: Values, key: string, mode: string | undefined): string {
     return v.pending.has(key) ? `<span class="ph" title="placeholder: a default awaiting a decision">${link}</span>` : link;
   }
   if (mode === "link") return `<a href="${esc(value)}">${esc(value)}</a>`;
+  if (mode === "cap") return esc(value.charAt(0).toUpperCase() + value.slice(1));
   if (mode) throw new Error(`legal-pages: unknown mode {{${key}:${mode}}}`);
   return v.pending.has(key) ? cell(value, "placeholder: a default awaiting a decision") : esc(value);
 }
@@ -182,7 +190,7 @@ function ownTag(html: string, re: RegExp): string | null {
 // the canonical address (one URL per document: /<doc>/, the directory, which Caddy redirects
 // /<doc> to) and what a posted link to it shows
 function head(doc: string, html: string): string {
-  const info = DOCS.find((d) => d.id === doc)!;
+  const info = BUILT_DOCS.find((d) => d.id === doc)!;
   const url = site() + "/" + doc + "/";
   const title = ownTag(html, /<title>([^<]*)<\/title>/);
   const description = ownTag(html, /<meta name="description" content="([^"]*)">/);
@@ -192,7 +200,7 @@ function head(doc: string, html: string): string {
     '<meta charset="utf-8">',
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     '<meta name="color-scheme" content="dark">',
-    LEGAL.draft && info.legal ? '<meta name="robots" content="noindex">' : "",
+    (LEGAL.draft && info.legal) || info.unlisted ? '<meta name="robots" content="noindex">' : "",
     `<link rel="canonical" href="${attr(url)}">`,
     meta("property", "og:type", "website"),
     meta("property", "og:site_name", "Retrocycles"),
@@ -220,7 +228,7 @@ function top(): string {
 }
 
 function draft(doc: string): string {
-  const info = DOCS.find((d) => d.id === doc)!;
+  const info = BUILT_DOCS.find((d) => d.id === doc)!;
   if (!LEGAL.draft || !info.legal) return "";
   return '<p class="doc-draft" id="doc-draft">Draft - not yet reviewed</p>';
 }
@@ -246,7 +254,7 @@ export function renderDoc(html: string, facts: BuildFacts): string {
   const m = /<body[^>]*\sdata-doc="([a-z-]+)"/.exec(html);
   if (!m) return html;
   const doc = m[1];
-  if (!DOCS.some((d) => d.id === doc)) throw new Error(`legal-pages: unknown document ${doc}`);
+  if (!BUILT_DOCS.some((d) => d.id === doc)) throw new Error(`legal-pages: unknown document ${doc}`);
   const v = values(facts);
   let out = html.replace(/<!--rc:if ([a-zA-Z]+)-->([\s\S]*?)(?:<!--rc:else-->([\s\S]*?))?<!--rc:end-->/g, (_all, flag: string, yes: string, no?: string) => {
     if (!(flag in v.flags)) throw new Error(`legal-pages: unknown flag ${flag}`);
@@ -265,7 +273,7 @@ export function renderDoc(html: string, facts: BuildFacts): string {
 
 // the documents as Rollup inputs (beside the play page's index.html)
 export function docInputs(): Record<string, string> {
-  return Object.fromEntries(DOCS.map((d) => [d.id, resolve(PAGE_ROOT, d.id, "index.html")]));
+  return Object.fromEntries(BUILT_DOCS.map((d) => [d.id, resolve(PAGE_ROOT, d.id, "index.html")]));
 }
 
 export function legalPages(): Plugin {

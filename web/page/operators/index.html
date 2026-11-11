@@ -1,0 +1,197 @@
+<!doctype html>
+<!-- The server operator agreement: what the operator of a community game server accepts to be
+     on the Retrocycles.io server list with moderation on, and the form to apply. Unlisted
+     (src/legal/config.ts): built with noindex, not in the documents' navigation or the
+     sitemap; the hosting guide links it. A static page filled in by tools/legal-pages.ts.
+     The agreement reads without script; the Apply form is
+     src/legal/operatorsPage.ts, the one document with a script. A new version of the text:
+     raise LEGAL.operatorAgreementVersion with the platform's Operators:AgreementVersion. -->
+<html lang="en">
+<head>
+<!--rc:head-->
+<title>Server operator agreement - Retrocycles</title>
+<meta name="description" content="The agreement for operators of moderated community servers on the Retrocycles.io server list, and the form to apply.">
+</head>
+<body class="doc" data-doc="operators">
+<!--rc:top-->
+<main class="doc-main" id="main">
+<header class="doc-head">
+<h1 class="doc-title">Retrocycles.io server operator agreement</h1>
+<p class="doc-sub">Version {{operatorAgreementVersion}}, effective {{operatorAgreementDate}}.</p>
+</header>
+
+<div class="doc-body">
+
+<p>This agreement is between you, the operator of a game server, and {{operator}} ("Retrocycles.io", "we"). It applies while your server is on the Retrocycles.io server list with moderation on. You accept it when you apply. If you run a server for a group or a company, you accept it for them, and you confirm that you may do so.</p>
+<p>Your server stays yours. This agreement covers only what you must do to stay on our list and to use our moderation service.</p>
+
+<h2 id="who">1. Who you are</h2>
+<p><b>1.1</b> Give us your name and a contact (an email address or a Discord account) that you check.</p>
+<p><b>1.2</b> Reply to us within 72 hours. Reply within 24 hours when we tell you that a report is about the safety of a player.</p>
+<p><b>1.3</b> Tell us when your contact changes, when someone else takes over the server, or when you stop running it.</p>
+
+<h2 id="conduct">2. Conduct on your server</h2>
+<p><b>2.1</b> Our <a href="../conduct/">code of conduct</a> applies on your server: to chat, player names, the server name and its messages. You may add your own rules. Your rules must not allow what the code of conduct forbids.</p>
+<p><b>2.2</b> Players from the age of {{minimumAge}} play on Retrocycles.io. Do not ask players for personal information, photos, their age, their location, or contact outside the game. Do not send players to private channels. Do not let others do this on your server.</p>
+<p><b>2.3</b> Do not show sexual content, hate, or content that is against the law.</p>
+
+<h2 id="moderation">3. Moderation</h2>
+<p><b>3.1</b> Keep the moderation settings on: <code>PLATFORM_CHAT_FILTER 1</code>, <code>PLATFORM_SANCTIONS 1</code> and <code>PLATFORM_REPORTS 1</code>. They are on by default.</p>
+<p><b>3.2</b> Run our release builds, or a build of our published source with the moderation code unchanged. Do not change, block or fake what your server sends to our moderation service.</p>
+<p><b>3.3</b> Our sanctions apply on your server. You may add your own mutes and bans. Do not lift our sanctions.</p>
+<p><b>3.4</b> When we send you a report about your server, act on it.</p>
+
+<h2 id="data">4. Player data</h2>
+<p><b>4.1</b> Your server sees the IP address of each player. Use IP addresses only to run and protect your server, for example for bans and connection limits.</p>
+<p><b>4.2</b> Keep logs that contain IP addresses or chat for no more than 30 days, unless you need them for an open abuse case or the law tells you to keep them.</p>
+<p><b>4.3</b> Do not sell or share player data. Do not use it to identify, track or contact players. Do not combine it with other data about them.</p>
+<p><b>4.4</b> You decide what your server keeps, so you are responsible for it under the law that applies to you. Tell us within 72 hours when you know that player data from your server was lost or stolen.</p>
+
+<h2 id="key">5. Your operator key</h2>
+<p><b>5.1</b> We give you one operator key for all your servers. It identifies your servers to our service. Keep it secret. Use it only on your servers that are on our list.</p>
+<p><b>5.2</b> Tell us at once when someone else could know the key. We then give you a new one. The new key replaces the old key on all your servers.</p>
+
+<h2 id="name">6. Name and identity</h2>
+<p><b>6.1</b> Your server's name and description must say what the server is.</p>
+<p><b>6.2</b> Do not use "Retrocycles", "official", "staff" or similar words in a way that tells players we run or approve your server. Do not show yourself as our staff.</p>
+<p><b>6.3</b> You may say "Play in your browser at retrocycles.io" and link to the site.</p>
+
+<h2 id="updates">7. Updates</h2>
+<p><b>7.1</b> Keep your server on a current release. When we make a new release the minimum, you have 14 days to update. For a security release you have 3 days. We tell you about each one.</p>
+<p><b>7.2</b> We recommend auto-update (<code>sudo retrocycles-server auto-update on</code>). It installs a release only while nobody plays.</p>
+<p><b>7.3</b> A server that is not current goes off the list until it updates.</p>
+
+<h2 id="fair">8. Fair play on your server</h2>
+<p><b>8.1</b> Do not move players to another host. Do not try to attack, track or change the players' browsers or game clients.</p>
+<p><b>8.2</b> Do not sell advantages in the game.</p>
+
+<h2 id="we">9. What we do</h2>
+<p><b>9.1</b> We list your server and send it chat checks, sanctions and reports. We give this service free of charge. We can change it or stop it.</p>
+<p><b>9.2</b> We may join your server without saying who we are, to check that moderation works.</p>
+<p><b>9.3</b> We may take your server off the list at any time, with or without a reason. When the cause is serious, we may also stop our players from joining it, and we may cancel your key.</p>
+<p><b>9.4</b> Your server leaves the list by itself when it stops sending heartbeats, when a moderation setting is off, or when its version is too old (7.3). It comes back when the cause is gone.</p>
+<p><b>9.5</b> We may change this agreement. We tell you 14 days before a change. If you keep your server on the list after that, you accept the change.</p>
+
+<h2 id="liability">10. Liability</h2>
+<p><b>10.1</b> Being on the list does not mean that we approve your server, and it does not make us partners.</p>
+<p><b>10.2</b> You are responsible for your server, what happens on it, and what it keeps.</p>
+<p><b>10.3</b> We give the service "as is", with no warranty. As far as the law allows, we are not liable for losses that come from the service or from the list.</p>
+<p><b>10.4</b> You protect us (you indemnify us) against claims that come from your server or from your breach of this agreement.</p>
+
+<h2 id="ending">11. Ending the agreement</h2>
+<p><b>11.1</b> You can end this agreement at any time. Tell us, then remove the operator key from your servers.</p>
+<p><b>11.2</b> The agreement ends when we take your server off the list for good (9.3).</p>
+<p><b>11.3</b> Sections 4, 10 and 12 continue after the agreement ends.</p>
+
+<h2 id="law">12. Law</h2>
+<p>{{governingLaw:cap}} apply to this agreement.</p>
+<p>Contact: {{contactEmail:mail}}</p>
+
+<section class="apply" id="apply" aria-labelledby="apply-title" data-version="{{operatorAgreementVersion}}">
+<h2 id="apply-title">Apply</h2>
+<p data-apply="static">Apply with the form on this page. The form needs JavaScript. You can also write to {{contactEmail:mail}}.</p>
+<p data-apply="loading" hidden>We are checking your account.</p>
+<p data-apply="signedOut" hidden>Sign in to apply. Open <a href="../">retrocycles.io</a>, select your name at the top right and sign in. Then come back to this page.</p>
+<p data-apply="guest" hidden>You play as a guest. You need an account to apply. Open <a href="../">retrocycles.io</a>, select your name at the top right and create an account. Then come back to this page.</p>
+<p data-apply="closed" hidden>This site does not take applications now. Write to {{contactEmail:mail}}.</p>
+<p data-apply="error" hidden>We could not reach our service. Try again later, or write to {{contactEmail:mail}}.</p>
+<p data-apply="stale" hidden>The agreement has a new version. <a href="./">Reload this page</a> to read it.</p>
+
+<p data-apply="pending" hidden>We have your application. We will look at it and contact you. You can add more servers after we approve you.</p>
+
+<form class="apply-form" data-apply="form" hidden novalidate>
+<p class="apply-lead">Send one application for all your servers. You get one operator key. It works on all your servers. You can add more servers later on this page.</p>
+<fieldset class="apply-servers">
+<legend class="key">Your servers</legend>
+<span class="apply-hint">One line for each server, up to 10. Write the host and the game port, as desktop players type it.</span>
+<ol class="apply-rows" data-server-rows></ol>
+<span class="apply-error" data-error="servers"></span>
+<p class="apply-more-line"><button class="apply-more" type="button" data-server-add>Add a server</button></p>
+</fieldset>
+<template data-server-row>
+<li class="apply-row">
+<p class="apply-field">
+<label class="key" data-for="address">Server address</label>
+<input name="address" type="text" required maxlength="300" autocomplete="off" spellcheck="false" placeholder="play.example.org:4534">
+<span class="apply-error" data-error-of="address"></span>
+</p>
+<p class="apply-field">
+<label class="key" data-for="name">Server name</label>
+<input name="name" type="text" required maxlength="128" autocomplete="off">
+<span class="apply-error" data-error-of="name"></span>
+</p>
+<p class="apply-row-actions"><button class="apply-more" type="button" data-server-remove>Remove this server</button></p>
+</li>
+</template>
+<p class="apply-field">
+<label class="key" for="op-operator">Your name</label>
+<input id="op-operator" name="operatorName" type="text" required maxlength="100" autocomplete="name" aria-describedby="op-operator-error">
+<span class="apply-error" id="op-operator-error" data-error="operatorName"></span>
+</p>
+<p class="apply-field">
+<label class="key" for="op-contact">Contact</label>
+<input id="op-contact" name="contact" type="text" required maxlength="200" autocomplete="email" spellcheck="false" aria-describedby="op-contact-hint op-contact-error">
+<span class="apply-hint" id="op-contact-hint">An email address or a Discord name that you check.</span>
+<span class="apply-error" id="op-contact-error" data-error="contact"></span>
+</p>
+<p class="apply-field">
+<label class="key" for="op-note">Note</label>
+<textarea id="op-note" name="note" rows="4" maxlength="1000" aria-describedby="op-note-hint op-note-error"></textarea>
+<span class="apply-hint" id="op-note-hint">Optional. Tell us about your servers and their players.</span>
+<span class="apply-error" id="op-note-error" data-error="note"></span>
+</p>
+<p class="apply-field apply-check">
+<label><input name="accepted" type="checkbox" required aria-describedby="op-accepted-error"> <span>I have read and accept the server operator agreement, version <span data-version-text>{{operatorAgreementVersion}}</span>.</span></label>
+<span class="apply-error" id="op-accepted-error" data-error="accepted"></span>
+</p>
+<p class="apply-actions">
+<button class="apply-button" type="submit">Apply</button>
+<span class="apply-note" role="status" aria-live="polite" data-apply-note></span>
+</p>
+</form>
+
+<div class="apply-operator" data-apply="operator" hidden>
+<h3 class="key" id="servers">Your servers</h3>
+<p>You are an approved operator. Your operator key works on all your servers. Each server has its own server id.</p>
+<p data-operator-revoked hidden>Your operator key is revoked. Your servers are not on the server list. Write to {{contactEmail:mail}}.</p>
+<p class="apply-when" data-operator-count></p>
+<ul class="apply-list" data-operator-list></ul>
+<p class="apply-note" role="status" aria-live="polite" data-operator-status></p>
+
+<form class="apply-form apply-add" data-operator-add novalidate>
+<h3 class="key" id="add">Add a server</h3>
+<p class="apply-hint">The server uses your operator key. It gets a new server id. It goes on the server list when it sends heartbeats with moderation on.</p>
+<p class="apply-field">
+<label class="key" for="op-add-address">Server address</label>
+<input id="op-add-address" name="address" type="text" required maxlength="300" autocomplete="off" spellcheck="false" placeholder="play.example.org:4534" aria-describedby="op-add-address-error">
+<span class="apply-error" id="op-add-address-error" data-error="address"></span>
+</p>
+<p class="apply-field">
+<label class="key" for="op-add-name">Server name</label>
+<input id="op-add-name" name="name" type="text" required maxlength="128" autocomplete="off" aria-describedby="op-add-name-error">
+<span class="apply-error" id="op-add-name-error" data-error="name"></span>
+</p>
+<p class="apply-actions">
+<button class="apply-button" type="submit">Add</button>
+<span class="apply-note" role="status" aria-live="polite" data-operator-note></span>
+</p>
+</form>
+
+<div class="apply-added" data-operator-added hidden>
+<p>Add these lines to the new server. Then add your operator key: the <code>PLATFORM_SERVER_KEY</code> line from your other servers. Restart the server.</p>
+<pre class="apply-settings" data-operator-settings></pre>
+</div>
+</div>
+
+<div class="apply-mine" data-apply="mine" hidden>
+<h3 class="key" id="mine">Your applications</h3>
+<ul class="apply-list" data-apply-list></ul>
+</div>
+</section>
+
+</div>
+</main>
+<!--rc:foot-->
+<script type="module" src="/src/legal/operatorsPage.ts"></script>
+</body>
+</html>
