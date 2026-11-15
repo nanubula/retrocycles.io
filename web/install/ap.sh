@@ -2,7 +2,8 @@
 # Installs the sty+ct+ap dedicated server with the WebRTC DataChannel transport for
 # browser clients (branch server) for one unix user, as a systemd service, the way
 # the community ap.sh (vixen.international/assets/pub/ap.sh) installs plain sty+ct+ap.
-# By default it installs the latest signed release; running it again updates.
+# By default it installs the latest signed release; running it again updates. More servers on
+# the same machine: retrocycles-server add <name>.
 #
 #   curl -fsSL https://raw.githubusercontent.com/nanubula/retrocycles.io/server/web/install/ap.sh | sudo bash
 #   curl -fsSL .../ap.sh | sudo AP_USER=arma bash        # without the question
@@ -14,6 +15,10 @@
 #   RELEASE     release to install, e.g. 0.2.9-sty+ct+ap+io.3; default the latest
 #   AUTO_UPDATE on: install new releases daily while the server is empty (default off;
 #               only used when /etc/retrocycles-server.conf is first written)
+#   MANAGE      self: install the release and the updater only, no server units and no server;
+#               you start the servers yourself with $PREFIX/current/bin/armagetronad-dedicated
+#               (see HOSTING.md). Unset on a later run: the updater runs the servers again.
+#   AP_SERVERS  names of more servers to add, e.g. "test ctwf" (retrocycles-server add)
 #   BEHIND_PROXY 1 when a local TLS reverse proxy (Caddy, nginx) will front the signalling
 #               port: the starter config then pins WEBRTC_SIGNAL_BIND 127.0.0.1. Default 0:
 #               signalling on every interface, for Direct Connect by host:port.
@@ -41,6 +46,8 @@ JOBS="${JOBS:-$(nproc)}"
 LOCAL_SRC="${LOCAL_SRC:-}"
 RELEASE="${RELEASE:-}"
 AUTO_UPDATE="${AUTO_UPDATE:-off}"
+MANAGE="${MANAGE:-service}"
+AP_SERVERS="${AP_SERVERS:-}"
 # releases and the key that signs them (the same key is in the updater)
 RELEASE_API="${RC_RELEASE_API:-https://api.github.com/repos/nanubula/retrocycles.io}"
 PUBLIC_KEY="RWSIKpeOYWO+3TDSp+ycEWZ68jvOe8vgRGz2weCXIKYNQorr43zegka+"
@@ -74,10 +81,36 @@ if ! id "$TARGET_USER" >/dev/null 2>&1; then
     echo "User '$TARGET_USER' does not exist; create it first (adduser $TARGET_USER)." >&2
     exit 1
 fi
+case "$MANAGE" in
+    service|self) ;;
+    *) echo "MANAGE is self or unset, not '$MANAGE'." >&2; exit 2 ;;
+esac
 HOME_DIR="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 PREFIX="${PREFIX:-$HOME_DIR/armagetronad}"
-DATA_DIR="$HOME_DIR/.armagetronad-dedicated"
+# all servers in one place: the first is ~/servers/default, the others ~/servers/<name>.
+# A config written by an earlier install keeps its paths (~/.armagetronad-dedicated).
+SERVERS_DIR="$HOME_DIR/servers"
+DATA_DIR="$SERVERS_DIR/default"
+if [ -r "$CONF" ] && [ "$(sed -n 's/^SERVER_USER=//p' "$CONF" | tail -n 1)" = "$TARGET_USER" ]; then
+    OLD_DATA_DIR="$(sed -n 's/^DATA_DIR=//p' "$CONF" | tail -n 1)"
+    OLD_SERVERS_DIR="$(sed -n 's/^SERVERS_DIR=//p' "$CONF" | tail -n 1)"
+    DATA_DIR="${OLD_DATA_DIR:-$DATA_DIR}"
+    SERVERS_DIR="${OLD_SERVERS_DIR:-$SERVERS_DIR}"
+fi
 SRC_DIR="$PREFIX/src"
+
+# MANAGE=self leaves the servers to the operator: servers this updater runs must stop first
+if [ "$MANAGE" = self ]; then
+    RUNNING_UNITS="$(cd /etc/systemd/system/multi-user.target.wants 2>/dev/null &&
+        find . -maxdepth 1 -name 'retrocycles-server*.service' -printf '%f ' || true)"
+    if [ -n "$RUNNING_UNITS" ]; then
+        echo "retrocycles-server runs servers on this machine: $RUNNING_UNITS" >&2
+        echo "With MANAGE=self you run them yourself. Stop and disable them first:" >&2
+        echo "  sudo systemctl disable --now $RUNNING_UNITS" >&2
+        echo "Their files stay where they are. Then run ap.sh again." >&2
+        exit 1
+    fi
+fi
 LDC_PREFIX="$PREFIX/deps/libdatachannel"
 
 case "$(uname -m)" in
@@ -141,10 +174,10 @@ echo "== user: $TARGET_USER, prefix: $PREFIX, $([ "$FROM_SOURCE" = 1 ] && echo "
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 # the updater's tools (minisign where the distribution has it, else openssl checks the
-# signatures) and the server's runtime libraries
+# signatures; ss finds free ports) and the server's runtime libraries
 MINISIGN="$(pkg minisign 2>/dev/null || echo openssl)"
 apt-get install -y --no-install-recommends \
-    sudo ca-certificates curl jq openssl "$MINISIGN" \
+    sudo ca-certificates curl jq openssl iproute2 "$MINISIGN" \
     libxml2 "$(pkg libzthread-2.3-2 libzthread-2.3-2t64)" "$(pkg libssl3 libssl3t64)" \
     "$(pkg libcurl4 libcurl4t64)"
 if [ "$FROM_SOURCE" = 1 ]; then
@@ -260,7 +293,12 @@ else
     echo "$VERSION" | as_user tee "$VERSION_DIR/VERSION" >/dev/null
 fi
 
+
 # --- the updater and its settings ----------------------------------------------------
+if [ "$MANAGE" = self ] && ! grep -q 'MANAGE=self' "$VERSION_DIR/bin/retrocycles-server"; then
+    echo "The updater of $VERSION has no MANAGE=self; install a newer release." >&2
+    exit 1
+fi
 install -m 755 "$VERSION_DIR/bin/retrocycles-server" "$UPDATER.new"
 mv -f "$UPDATER.new" "$UPDATER"
 if [ ! -e "$CONF" ]; then
@@ -269,15 +307,89 @@ if [ ! -e "$CONF" ]; then
 # (see HOSTING.md, "Updating"). Written by ap.sh; it keeps your changes when run again.
 SERVER_USER=$TARGET_USER
 PREFIX=$PREFIX
+# the files of the first server ("default"); the others are in SERVERS_DIR/<name>
 DATA_DIR=$DATA_DIR
+SERVERS_DIR=$SERVERS_DIR
+# service: retrocycles-server runs the servers as systemd units; self: you run them (ap.sh MANAGE=self)
+MANAGE=$MANAGE
 # on: install new releases once a day while nobody is playing (retrocycles-server auto-update on|off)
 AUTO_UPDATE=$AUTO_UPDATE
 # on: say at start and once a day when a newer release exists (asks api.github.com, nothing else)
 UPDATE_CHECK=on
+# With MANAGE=self only (see HOSTING.md, "Managing the servers yourself"):
+# a command, run as $TARGET_USER after an update or rollback, that restarts your servers
+# RESTART_CMD='cd ~/armagetronad/scripts && . boot.sh'
+# the --input files of your servers, for the in-game warning before that restart
+# INPUT_FILES='$HOME_DIR/armagetronad/servers/*/var/input.txt'
+# the online_players.txt of your servers: needed for --when-empty and auto-update
+# ONLINE_FILES='$HOME_DIR/armagetronad/servers/*/var/online_players.txt'
 EOF
 else
     sed -i -e "s|^SERVER_USER=.*|SERVER_USER=$TARGET_USER|" -e "s|^PREFIX=.*|PREFIX=$PREFIX|" \
         -e "s|^DATA_DIR=.*|DATA_DIR=$DATA_DIR|" "$CONF"
+    if grep -q '^MANAGE=' "$CONF"; then
+        sed -i "s|^MANAGE=.*|MANAGE=$MANAGE|" "$CONF"
+    else
+        echo "MANAGE=$MANAGE" >> "$CONF"
+    fi
+fi
+
+# servers of the community scripts in ~/armagetronad/servers (vixen ap.sh and setup.sh): this
+# install never changes them, their bin/ or their scripts/; it only names their game ports
+COMMUNITY_PORTS=""
+COMMUNITY_DIR="$HOME_DIR/armagetronad/servers"
+for d in "$COMMUNITY_DIR"/*/; do
+    [ -d "$d" ] || continue
+    p="$( { cat "$d"/settings/*.cfg "$d"/var/autoexec.cfg 2>/dev/null || true; } |
+        awk 'toupper($1) == "SERVER_PORT" && $2 ~ /^[0-9]+$/ { v = $2 } END { print v }')"
+    COMMUNITY_PORTS="$COMMUNITY_PORTS $(basename "$d") (${p:-4534})"
+done
+
+PORT_HINT="$SERVER_PORT/udp (game), $SIGNAL_PORT/tcp (browser signalling, ws://), $ICE_PORT/udp (browser game traffic, ICE)"
+OLD_HINT=""
+if [ -x "$PREFIX/bin/armagetronad-dedicated" ] && [ ! -L "$PREFIX/bin" ]; then
+    OLD_HINT="
+   Note:     $PREFIX/bin is another, older install. It is not changed; servers started from it
+             keep running the old version."
+fi
+if [ -n "$COMMUNITY_PORTS" ]; then
+    OLD_HINT="$OLD_HINT
+   Note:     $COMMUNITY_DIR holds servers of the community scripts:$COMMUNITY_PORTS.
+             They are not changed. Give each server its own game port."
+fi
+
+if [ "$MANAGE" = self ]; then
+    # --- MANAGE=self: the release and the updater, no server --------------------------
+    "$UPDATER" install-service
+    "$UPDATER" switch "$VERSION_NAME"
+    # scripts that call PREFIX/bin/armagetronad-dedicated (the community layout) find this
+    # release there, unless PREFIX/bin is a real directory: that one is never replaced
+    BIN_HINT="$PREFIX/current/bin/armagetronad-dedicated"
+    if [ ! -e "$PREFIX/bin" ] && [ ! -L "$PREFIX/bin" ]; then
+        as_user ln -s current/bin "$PREFIX/bin"
+    fi
+    if [ "$(readlink "$PREFIX/bin" 2>/dev/null)" = current/bin ]; then
+        BIN_HINT="$BIN_HINT
+             (also $PREFIX/bin/armagetronad-dedicated: $PREFIX/bin links to current/bin)"
+    elif [ -e "$PREFIX/bin" ]; then
+        BIN_HINT="$BIN_HINT
+             $PREFIX/bin is another install and stays as it is; scripts that call
+             $PREFIX/bin/armagetronad-dedicated still start that one. To use this release, set
+             tron=\"$PREFIX/current/bin/armagetronad-dedicated\" in $PREFIX/scripts/srv.sh."
+    fi
+    cat <<EOF
+
+== done. Dedicated server $VERSION with WebRTC transport installed in $PREFIX/current
+   You run the servers yourself (MANAGE=self); no service was installed or started.
+   binary:   $BIN_HINT
+   ports:    three per server, from its game port N (SERVER_PORT): N/udp (game), N+1/tcp
+             (browser signalling, ws://), N+1000/udp (browser game traffic, ICE)
+   updates:  sudo retrocycles-server update installs a release and switches current to it.
+             Set RESTART_CMD in $CONF to restart your servers after it;
+             INPUT_FILES and ONLINE_FILES there give player warnings and auto-update.
+   Guide:    https://github.com/nanubula/retrocycles.io/blob/server/web/docs/HOSTING.md$OLD_HINT
+EOF
+    exit 0
 fi
 
 # --- first configuration --------------------------------------------------------------
@@ -295,6 +407,7 @@ else
 # WEBRTC_SIGNAL_BIND 127.0.0.1
 # WEBRTC_SIGNAL_PORT $SIGNAL_PORT"
 fi
+# the same block as the updater's starter_config for other servers
 if [ ! -e "$CFG_DIR/var/autoexec.cfg" ]; then
     as_user tee "$CFG_DIR/var/autoexec.cfg" >/dev/null <<EOF
 # WebRTC transport for browser clients; see HOSTING.md for the settings.
@@ -310,21 +423,23 @@ $BIND_LINES
 EOF
 fi
 
-# --- the service: start it, or switch it to this version ---------------------------------
+# --- the services: start them, or switch them to this version -----------------------------
 "$UPDATER" install-service
 "$UPDATER" switch "$VERSION_NAME"
+
+for name in $AP_SERVERS; do
+    if systemctl is-enabled --quiet "retrocycles-server@$name" 2>/dev/null; then
+        echo "== server $name exists"
+    else
+        "$UPDATER" add "$name"
+    fi
+done
 
 if [ "$BEHIND_PROXY" = 1 ]; then
     PORT_HINT="$SERVER_PORT/udp (game), $ICE_PORT/udp (browser game traffic, ICE); TCP $SIGNAL_PORT stays on loopback"
     PROXY_HINT="Proxy wss:// to 127.0.0.1:$SIGNAL_PORT with Caddy or nginx (TLS, open 80/443 for it)."
 else
-    PORT_HINT="$SERVER_PORT/udp (game), $SIGNAL_PORT/tcp (browser signalling, ws://), $ICE_PORT/udp (browser game traffic, ICE)"
     PROXY_HINT="Browser players join by host:port with Direct Connect; a wss:// proxy is optional."
-fi
-OLD_HINT=""
-if [ -x "$PREFIX/bin/armagetronad-dedicated" ]; then
-    OLD_HINT="
-   Note:     $PREFIX/bin is an older install and no longer used; stop any server started from it."
 fi
 
 cat <<EOF
@@ -335,6 +450,7 @@ cat <<EOF
    updates:  retrocycles-server status | sudo retrocycles-server update | sudo retrocycles-server auto-update on
    ports:    $PORT_HINT
              (game port $SERVER_PORT, + 1 and + 1000; the server prints them at start: "WebRTC: firewall: ...")
+   more:     sudo retrocycles-server add <name> adds a server with its own ports; retrocycles-server list
    $PROXY_HINT$OLD_HINT
    Guide:    https://github.com/nanubula/retrocycles.io/blob/server/web/docs/HOSTING.md
 EOF

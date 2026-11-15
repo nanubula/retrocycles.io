@@ -1,18 +1,29 @@
 #!/usr/bin/env bash
-# retrocycles-server: keeps a Retrocycles dedicated server up to date.
+# retrocycles-server: keeps the Retrocycles dedicated servers of this machine up to date.
 #
-#   retrocycles-server status                  installed and latest version, auto-update, service
+#   retrocycles-server status                  installed and latest version, auto-update, servers
 #   retrocycles-server check                   says whether a newer release exists
 #   retrocycles-server update [--yes] [--version V] [--when-empty]
 #   retrocycles-server rollback                back to the version before the last update
-#   retrocycles-server auto-update on|off      daily update while the server is empty
+#   retrocycles-server auto-update on|off      daily update while all servers are empty
+#   retrocycles-server list                    the servers: name, unit, game port, state, players
+#   retrocycles-server add <name> [--port N]   a new server with its own settings and ports
+#   retrocycles-server remove <name> [--purge] [--yes]
+#   retrocycles-server start|stop|restart <name>|all
 # ap.sh and the daily timer also use: install-service, switch <version dir>, daily.
 #
 # Releases are the GitHub releases of nanubula/retrocycles.io: a tarball per architecture,
 # SHA256SUMS and its minisign signature. Nothing unsigned is installed. Versions live side
 # by side in $PREFIX/versions/<version>; $PREFIX/current points at the one that runs and
-# $PREFIX/previous at the one before it. The game's settings, logs and state stay in
-# $DATA_DIR and are never touched.
+# $PREFIX/previous at the one before it. All servers run $PREFIX/current. The game's
+# settings, logs and state stay in each server's data directory and are never touched.
+#
+# Servers: "default" is retrocycles-server.service with its files in $DATA_DIR (the server
+# ap.sh sets up). Each other server <name> is the instance retrocycles-server@<name> of a
+# template unit, with its files in $SERVERS_DIR/<name>. A server belongs to the list while
+# $SERVERS_DIR/<name>/var exists and its unit is enabled or running; "remove" disables it.
+# With MANAGE=self the operator starts the servers (their own scripts); the updater then only
+# installs versions and runs RESTART_CMD after a change, if it is set.
 #
 # Settings: /etc/retrocycles-server.conf (written by ap.sh; RC_CONF overrides the path).
 # RELEASE_API there, or RC_RELEASE_API, points at another releases API (a mirror, a test).
@@ -28,6 +39,11 @@ UNIT_DIR=/etc/systemd/system
 SERVER_USER=""
 PREFIX=""
 DATA_DIR=""
+SERVERS_DIR=""           # empty: ~/servers of SERVER_USER
+MANAGE=service           # service: the updater runs the servers as systemd units; self: you do
+RESTART_CMD=""           # MANAGE=self: shell command, run as SERVER_USER, that restarts your servers
+INPUT_FILES=""           # MANAGE=self: globs of the --input files of your servers (warnings)
+ONLINE_FILES=""          # MANAGE=self: globs of the online_players.txt of your servers
 SERVICE=retrocycles-server
 AUTO_UPDATE=off
 UPDATE_CHECK=on
@@ -37,12 +53,16 @@ HEALTH_PATTERN='WebRTC: accepting browser clients|Taking a nap'
 EMPTY_POLL_SECONDS=300   # --when-empty: how often to look again while players are online
 EMPTY_WAIT_HOURS=20      # --when-empty: give up for the day after this long
 KEEP_VERSIONS=3          # installed versions kept, besides current and previous
+FIRST_PORT=4534          # add: the lowest game port it picks
 
 if [ -r "$CONF" ]; then
     # shellcheck source=/dev/null
     . "$CONF"
 fi
 RELEASE_API="${RC_RELEASE_API:-$RELEASE_API}"
+if [ -z "$SERVERS_DIR" ] && [ -n "$SERVER_USER" ]; then
+    SERVERS_DIR="$(getent passwd "$SERVER_USER" | cut -d: -f6)/servers"
+fi
 
 log() { echo "retrocycles-server: $*"; }
 die() { echo "retrocycles-server: $*" >&2; exit 1; }
@@ -52,6 +72,10 @@ need_conf() {
         die "$CONF is missing or lacks SERVER_USER, PREFIX or DATA_DIR; run ap.sh first."
 }
 need_root() { [ "$(id -u)" -eq 0 ] || die "run this as root (sudo retrocycles-server $1)."; }
+self_managed() { [ "$MANAGE" = self ]; }
+need_managed() {
+    ! self_managed || die "$1 is not available: you manage the servers yourself (MANAGE=self in $CONF). Run ap.sh without MANAGE=self to let retrocycles-server run them."
+}
 
 # --- versions -------------------------------------------------------------------------------
 
@@ -180,77 +204,15 @@ prune() {
         [ "$n" -gt "$KEEP_VERSIONS" ] && rm -rf "$d"
     done < <(find "$PREFIX/versions" -mindepth 1 -maxdepth 1 -type d ! -name '.*' -printf '%T@ %p\n' |
              sort -rn | cut -d ' ' -f 2-)
+    # the loop's status is that of its last test; keeping a version is no failure
+    return 0
 }
-
-# --- the running server ---------------------------------------------------------------------
-
-service_active() { systemctl is-active --quiet "$SERVICE"; }
 
 lock() {
     local f=/run/lock/retrocycles-server.lock
     [ -d /run/lock ] || f="$PREFIX/.update.lock"
     exec 9>"$f"
-    flock -n 9 || die "another update or rollback is running."
-}
-
-# human players on the server now. The server rewrites var/online_players.txt every game
-# frame while a match runs, and once more when it goes idle: a map line, then one line per
-# player, "<user> <alive> <ping ms> <score> <access> <name>", or "Nobody Online.". Bots are
-# listed too and have ping 0. A file older than the server's start means nobody came since.
-players_online() {
-    local f="$DATA_DIR/var/online_players.txt" started mtime
-    if ! service_active || [ ! -r "$f" ]; then echo 0; return; fi
-    started="$(systemctl show -p ExecMainStartTimestamp --value "$SERVICE")"
-    started="$(date -d "$started" +%s 2>/dev/null || echo 0)"
-    mtime="$(stat -c %Y "$f")"
-    if [ "$mtime" -lt "$started" ]; then echo 0; return; fi
-    awk 'NR == 1 && /^Nobody Online/ { exit } NR > 1 && NF >= 3 && $3 + 0 != 0 { n++ } END { print n + 0 }' "$f"
-}
-
-# appends console commands to the file the server polls (--input)
-server_command() {
-    local input="$DATA_DIR/var/input.txt"
-    [ -e "$input" ] || return 0
-    printf '%s\n' "$@" >> "$input"
-}
-
-warn_players() { # warn_players <what>
-    local players secs="$WARN_SECONDS"
-    players="$(players_online)"
-    [ "$players" -gt 0 ] && [ "$secs" -gt 0 ] || return 0
-    log "$players player(s) online: warning them, restarting in $secs s."
-    server_command "CONSOLE_MESSAGE 0xff4040Server $1: this server restarts in $secs seconds. Rejoin in a minute." \
-                   "CENTER_MESSAGE 0xff4040Server restart in $secs seconds"
-    if [ "$secs" -gt 5 ]; then
-        sleep $((secs - 5))
-        server_command "CENTER_MESSAGE 0xff4040Server restart in 5 seconds"
-        sleep 5
-    else
-        sleep "$secs"
-    fi
-}
-
-# restarts the service and waits until the new process runs the expected binary and has
-# logged that it is up
-restart_and_check() { # restart_and_check <version dir>
-    local want since pid i
-    want="$(readlink -f "$1/bin/armagetronad-dedicated")"
-    since="$(date '+%Y-%m-%d %H:%M:%S')"
-    systemctl restart "$SERVICE" || true
-    for ((i = 0; i < HEALTH_SECONDS; i++)); do
-        sleep 1
-        service_active || continue
-        pid="$(systemctl show -p MainPID --value "$SERVICE")"
-        [ "${pid:-0}" != 0 ] || continue
-        [ "$(readlink -f "/proc/$pid/exe" 2>/dev/null)" = "$want" ] || continue
-        # grep reads it all (no -q): an early exit would fail the pipe (pipefail)
-        if journalctl -u "$SERVICE" --since "$since" -o cat --no-pager 2>/dev/null | grep -E "$HEALTH_PATTERN" >/dev/null; then
-            # still alive a moment later
-            sleep 3
-            [ "$(systemctl show -p MainPID --value "$SERVICE")" = "$pid" ] && kill -0 "$pid" 2>/dev/null && return 0
-        fi
-    done
-    return 1
+    flock -n 9 || die "another update, rollback or server change is running."
 }
 
 point() { # point <link name> <version dir>
@@ -259,39 +221,352 @@ point() { # point <link name> <version dir>
     chown -h "$SERVER_USER:$(id -gn "$SERVER_USER")" "$PREFIX/$1"
 }
 
-# makes versions/<dir> current, restarts and checks; puts the old one back if it does not
-# come up. A stopped service stays stopped (the new version runs at its next start) unless
-# "start" is given.
+# --- the servers ----------------------------------------------------------------------------
+
+valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]]; }
+unit_of() { if [ "$1" = default ]; then echo "$SERVICE"; else echo "$SERVICE@$1"; fi; }
+dir_of() { if [ "$1" = default ]; then echo "$DATA_DIR"; else echo "$SERVERS_DIR/$1"; fi; }
+server_active() { systemctl is-active --quiet "$(unit_of "$1")"; }
+
+# every server of this machine, "default" first
+servers() {
+    [ -e "$UNIT_DIR/$SERVICE.service" ] && echo default
+    [ -n "$SERVERS_DIR" ] && [ -d "$SERVERS_DIR" ] || return 0
+    local d n
+    for d in "$SERVERS_DIR"/*/; do
+        n="$(basename "$d")"
+        valid_name "$n" && [ "$n" != default ] && [ -d "$d/var" ] || continue
+        if systemctl is-enabled --quiet "$SERVICE@$n" 2>/dev/null || systemctl is-active --quiet "$SERVICE@$n"; then
+            echo "$n"
+        fi
+    done
+    return 0
+}
+is_server() { servers | grep -xF "$1" >/dev/null; }
+running_servers() {
+    local n
+    for n in $(servers); do server_active "$n" && echo "$n"; done
+    return 0
+}
+
+# the last value of a setting in the config files of a server directory, in the order the
+# server reads them (settings_custom.cfg, then autoexec.cfg; the var/ copy last). INCLUDEs are
+# not followed. settings/*.cfg is where servers of the community scripts keep SERVER_PORT.
+setting_in() { # setting_in <dir> <SETTING>
+    local d="$1" f
+    for f in "$d"/settings/*.cfg "$d/config/settings_custom.cfg" "$d/settings_custom.cfg" \
+             "$d/var/settings_custom.cfg" "$d/config/autoexec.cfg" "$d/autoexec.cfg" "$d/var/autoexec.cfg"; do
+        if [ -r "$f" ]; then cat "$f"; fi
+    done | awk -v k="$2" 'toupper($1) == k && $2 ~ /^[0-9]+$/ { v = $2 } END { print v }'
+}
+
+# the ports of a server: PORT_GAME (UDP), PORT_SIGNAL (TCP), PORT_ICE_MIN..PORT_ICE_MAX (UDP)
+server_ports() { # server_ports <name>
+    dir_ports "$(dir_of "$1")"
+}
+dir_ports() { # dir_ports <server dir>
+    local v min max
+    PORT_GAME="$(setting_in "$1" SERVER_PORT)"
+    PORT_GAME="${PORT_GAME:-4534}"
+    v="$(setting_in "$1" WEBRTC_SIGNAL_PORT)"
+    if [ "${v:-0}" -gt 0 ]; then PORT_SIGNAL="$v"; else PORT_SIGNAL=$((PORT_GAME + 1)); fi
+    min="$(setting_in "$1" WEBRTC_PORT_MIN)"
+    max="$(setting_in "$1" WEBRTC_PORT_MAX)"
+    min="${min:-0}"
+    max="${max:-0}"
+    if [ "$min" -gt 0 ]; then
+        PORT_ICE_MIN="$min"
+        if [ "$max" -gt "$min" ]; then PORT_ICE_MAX="$max"; else PORT_ICE_MAX="$min"; fi
+    else
+        PORT_ICE_MIN=$((PORT_GAME + 1000))
+        PORT_ICE_MAX="$PORT_ICE_MIN"
+    fi
+}
+ports_text() { # after server_ports
+    local ice="$PORT_ICE_MIN"
+    [ "$PORT_ICE_MAX" = "$PORT_ICE_MIN" ] || ice="$PORT_ICE_MIN-$PORT_ICE_MAX"
+    echo "UDP $PORT_GAME (game), TCP $PORT_SIGNAL (browser signalling), UDP $ice (browser game traffic, ICE)"
+}
+
+# says which server already uses one of the ports of game port $1 (UDP $1, TCP $1+1,
+# UDP $1+1000), or which ports are taken on this machine; nothing when they are free
+ports_overlap() { # ports_overlap <game> <signal> <ice>, after dir_ports
+    [ "$1" = "$PORT_GAME" ] || [ "$3" = "$PORT_GAME" ] || [ "$2" = "$PORT_SIGNAL" ] ||
+        { [ "$1" -ge "$PORT_ICE_MIN" ] && [ "$1" -le "$PORT_ICE_MAX" ]; } ||
+        { [ "$3" -ge "$PORT_ICE_MIN" ] && [ "$3" -le "$PORT_ICE_MAX" ]; }
+}
+port_clash() { # port_clash <game port> <name to skip>
+    local g="$1" s=$(($1 + 1)) i=$(($1 + 1000)) n d
+    for n in $(servers); do
+        [ "$n" != "$2" ] || continue
+        server_ports "$n"
+        if ports_overlap "$g" "$s" "$i"; then
+            echo "server $n uses $(ports_text)"
+            return
+        fi
+    done
+    # servers of the community scripts (~/armagetronad/servers/<name>, or PREFIX/servers),
+    # running or not
+    local home
+    home="$(getent passwd "$SERVER_USER" | cut -d: -f6)"
+    for d in "$PREFIX"/servers/*/ "$home"/armagetronad/servers/*/; do
+        [ -d "$d" ] && [ "${d%/}" != "$SERVERS_DIR/$2" ] || continue
+        dir_ports "$d"
+        if ports_overlap "$g" "$s" "$i"; then
+            echo "the server in ${d%/} uses $(ports_text)"
+            return
+        fi
+    done
+    command -v ss >/dev/null 2>&1 || return 0
+    local udp tcp p taken=""
+    udp=" $(ss -Hanu 2>/dev/null | awk '{ sub(/.*:/, "", $4); print $4 }' | sort -un | tr '\n' ' ') "
+    tcp=" $(ss -Hltn 2>/dev/null | awk '{ sub(/.*:/, "", $4); print $4 }' | sort -un | tr '\n' ' ') "
+    for p in "$g" "$i"; do [[ "$udp" == *" $p "* ]] && taken="$taken UDP $p"; done
+    [[ "$tcp" == *" $s "* ]] && taken="$taken TCP $s"
+    [ -z "$taken" ] || echo "a program on this machine already uses$taken"
+}
+
+# human players on a server now. The server rewrites var/online_players.txt every game
+# frame while a match runs, and once more when it goes idle: a map line, then one line per
+# player, "<user> <alive> <ping ms> <score> <access> <name>", or "Nobody Online.". Bots are
+# listed too and have ping 0. A file older than the server's start means nobody came since.
+humans_in() { # humans_in <online_players.txt>
+    awk 'NR == 1 && /^Nobody Online/ { exit } NR > 1 && NF >= 3 && $3 + 0 != 0 { n++ } END { print n + 0 }' "$1"
+}
+players_online() { # players_online <name>
+    local f started mtime unit
+    unit="$(unit_of "$1")"
+    f="$(dir_of "$1")/var/online_players.txt"
+    if ! systemctl is-active --quiet "$unit" || [ ! -r "$f" ]; then echo 0; return; fi
+    started="$(systemctl show -p ExecMainStartTimestamp --value "$unit")"
+    started="$(date -d "$started" +%s 2>/dev/null || echo 0)"
+    mtime="$(stat -c %Y "$f")"
+    if [ "$mtime" -lt "$started" ]; then echo 0; return; fi
+    humans_in "$f"
+}
+
+# MANAGE=self: humans in the ONLINE_FILES written in the last 10 minutes (a file with players
+# in it is rewritten every frame; an older one is left from a server that stopped)
+self_players() {
+    local f n=0
+    for f in $ONLINE_FILES; do
+        [ -r "$f" ] && [ -n "$(find "$f" -mmin -10 2>/dev/null)" ] || continue
+        n=$((n + $(humans_in "$f")))
+    done
+    echo "$n"
+}
+
+# humans on all servers
+all_players() {
+    if self_managed; then self_players; return; fi
+    local n total=0
+    for n in $(running_servers); do total=$((total + $(players_online "$n"))); done
+    echo "$total"
+}
+
+# appends console commands to the file a server polls (--input)
+input_command() { # input_command <input file> <line>...
+    local input="$1"
+    shift
+    [ -e "$input" ] || return 0
+    printf '%s\n' "$@" >> "$input"
+}
+
+# the in-game warning on every given input file, then the wait
+warn_and_wait() { # warn_and_wait <what> <players> <input file>...
+    local what="$1" players="$2" secs="$WARN_SECONDS" f
+    shift 2
+    [ $# -gt 0 ] && [ "$secs" -gt 0 ] || return 0
+    log "$players player(s) online: warning them, restarting in $secs s."
+    for f in "$@"; do
+        input_command "$f" "CONSOLE_MESSAGE 0xff4040Server $what: this server restarts in $secs seconds. Rejoin in a minute." \
+                           "CENTER_MESSAGE 0xff4040Server restart in $secs seconds"
+    done
+    if [ "$secs" -gt 5 ]; then
+        sleep $((secs - 5))
+        for f in "$@"; do input_command "$f" "CENTER_MESSAGE 0xff4040Server restart in 5 seconds"; done
+        sleep 5
+    else
+        sleep "$secs"
+    fi
+}
+
+# warns the players of the given servers that have any
+warn_players() { # warn_players <what> <name>...
+    local what="$1" n p total=0 files=()
+    shift
+    for n in "$@"; do
+        p="$(players_online "$n")"
+        [ "$p" -gt 0 ] || continue
+        total=$((total + p))
+        files+=("$(dir_of "$n")/var/input.txt")
+    done
+    [ "$total" -gt 0 ] || return 0
+    warn_and_wait "$what" "$total" "${files[@]}"
+}
+
+# waits until a restarted server runs the expected binary and has logged that it is up
+check_up() { # check_up <name> <binary> <since> <deadline>
+    local unit pid
+    unit="$(unit_of "$1")"
+    while [ "$(date +%s)" -lt "$4" ]; do
+        sleep 1
+        systemctl is-active --quiet "$unit" || continue
+        pid="$(systemctl show -p MainPID --value "$unit")"
+        [ "${pid:-0}" != 0 ] || continue
+        [ "$(readlink -f "/proc/$pid/exe" 2>/dev/null)" = "$2" ] || continue
+        # grep reads it all (no -q): an early exit would fail the pipe (pipefail)
+        if journalctl -u "$unit" --since "$3" -o cat --no-pager 2>/dev/null | grep -E "$HEALTH_PATTERN" >/dev/null; then
+            # still alive a moment later
+            sleep 3
+            [ "$(systemctl show -p MainPID --value "$unit")" = "$pid" ] && kill -0 "$pid" 2>/dev/null && return 0
+        fi
+    done
+    return 1
+}
+
+# restarts (or starts) the given servers on a version and checks each; FAILED lists those
+# that did not come up within HEALTH_SECONDS
+FAILED=""
+restart_and_check() { # restart_and_check <restart|start> <version dir> <name>...
+    local verb="$1" want since deadline n
+    want="$(readlink -f "$2/bin/armagetronad-dedicated")"
+    shift 2
+    since="$(date '+%Y-%m-%d %H:%M:%S')"
+    for n in "$@"; do systemctl "$verb" "$(unit_of "$n")" || true; done
+    deadline=$(( $(date +%s) + HEALTH_SECONDS ))
+    FAILED=""
+    for n in "$@"; do
+        check_up "$n" "$want" "$since" "$deadline" || FAILED="$FAILED $n"
+    done
+    FAILED="${FAILED# }"
+    [ -z "$FAILED" ]
+}
+
+journal_hint() { # journal_hint <name>...
+    local n out=""
+    for n in "$@"; do out="$out, journalctl -u $(unit_of "$n")"; done
+    echo "see ${out#, }"
+}
+
+# --- MANAGE=self ------------------------------------------------------------------------------
+
+# processes that run the given binary
+exe_pids() { # exe_pids <binary>
+    local p
+    for p in /proc/[0-9]*; do
+        [ "$(readlink -f "$p/exe" 2>/dev/null)" = "$1" ] && echo "${p#/proc/}"
+    done
+    return 0
+}
+
+run_restart_cmd() {
+    local home rc=0
+    home="$(getent passwd "$SERVER_USER" | cut -d: -f6)"
+    log "running RESTART_CMD as $SERVER_USER: $RESTART_CMD"
+    (cd / && timeout "$HEALTH_SECONDS" runuser -u "$SERVER_USER" -- env HOME="$home" bash -c "cd && $RESTART_CMD") || rc=$?
+    [ "$rc" = 0 ] || log "RESTART_CMD exited with $rc."
+}
+
+# after RESTART_CMD: at least as many processes run the new binary as ran the old one, none
+# runs the old one any more, and the same processes still run 3 s later
+self_check() { # self_check <new binary> <old binary> <count>
+    local deadline pids
+    deadline=$(( $(date +%s) + HEALTH_SECONDS ))
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        sleep 1
+        [ -z "$(exe_pids "$2")" ] || continue
+        pids="$(exe_pids "$1")"
+        [ "$(echo "$pids" | grep -c .)" -ge "$3" ] || continue
+        sleep 3
+        [ "$(exe_pids "$1")" = "$pids" ] && return 0
+    done
+    return 1
+}
+
+self_switch() { # self_switch <new dir> <old dir> <what>
+    local new="$1" old="$2" newbin oldbin count players
+    newbin="$(readlink -f "$new/bin/armagetronad-dedicated")"
+    if [ -z "$RESTART_CMD" ] || [ -z "$old" ]; then
+        point current "$new"
+        [ -n "$old" ] && point previous "$old"
+        log "now $(version_of "$new"): $PREFIX/current/bin/armagetronad-dedicated."
+        [ -n "$old" ] && log "restart your servers to run it; until then they run $(version_of "$old")."
+        return 0
+    fi
+    oldbin="$(readlink -f "$old/bin/armagetronad-dedicated")"
+    count="$(exe_pids "$oldbin" | grep -c . || true)"
+    if [ "$count" = 0 ]; then
+        point current "$new"
+        point previous "$old"
+        log "now $(version_of "$new"); no server runs $(version_of "$old"), so RESTART_CMD did not run."
+        return 0
+    fi
+    if [ -n "$INPUT_FILES" ]; then
+        local files=() f
+        for f in $INPUT_FILES; do [ -e "$f" ] && files+=("$f"); done
+        # without ONLINE_FILES nobody knows whether players are on: warn anyway
+        if [ -n "$ONLINE_FILES" ]; then players="$(self_players)"; else players="some"; fi
+        [ "$players" = 0 ] || [ ${#files[@]} = 0 ] || warn_and_wait "$3" "$players" "${files[@]}"
+    fi
+    point current "$new"
+    run_restart_cmd
+    if self_check "$newbin" "$oldbin" "$count"; then
+        point previous "$old"
+        log "now running $(version_of "$new") ($count server process(es))."
+        return 0
+    fi
+    log "the servers did not all come up on $(version_of "$new") within $HEALTH_SECONDS s; going back to $(version_of "$old")."
+    point current "$old"
+    run_restart_cmd
+    die "$3 to $(version_of "$new") failed: after RESTART_CMD, not all $count server(s) ran the new binary."
+}
+
+# --- switching versions -----------------------------------------------------------------------
+
+# makes versions/<dir> current, restarts every running server and checks each; puts the old
+# version back on all of them if one does not come up. Stopped servers stay stopped (they run
+# the new version at their next start); with "start" the default server is started too.
 switch_to() { # switch_to <dir> <what: update|rollback> [start]
     local new="$PREFIX/versions/$1" old=""
     [ -x "$new/bin/armagetronad-dedicated" ] || die "version $1 is not installed."
     [ -e "$PREFIX/current" ] && old="$(readlink -f "$PREFIX/current")"
     if [ "$old" = "$(readlink -f "$new")" ]; then
         log "$(version_of "$new") is already the current version."
-        if ! service_active && [ "${3:-}" = start ]; then
-            restart_and_check "$new" || die "the server does not come up; see journalctl -u $SERVICE."
+        if ! self_managed && ! server_active default && [ "${3:-}" = start ]; then
+            restart_and_check start "$new" default || die "the server does not come up; $(journal_hint default)."
         fi
         return 0
     fi
-    if ! service_active && [ "${3:-}" != start ]; then
+    if self_managed; then
+        self_switch "$new" "$old" "$2"
+        return
+    fi
+    local names
+    mapfile -t names < <(running_servers)
+    if [ "${3:-}" = start ] && ! server_active default; then names=(default "${names[@]}"); fi
+    if [ ${#names[@]} = 0 ]; then
         point current "$new"
         [ -n "$old" ] && point previous "$old"
-        log "now $(version_of "$new"); $SERVICE is stopped and runs it at its next start."
+        log "now $(version_of "$new"); no server runs, they run it at their next start."
         return 0
     fi
-    service_active && warn_players "$2"
+    warn_players "$2" "${names[@]}"
     point current "$new"
-    if restart_and_check "$new"; then
+    if restart_and_check restart "$new" "${names[@]}"; then
         [ -n "$old" ] && point previous "$old"
-        log "now running $(version_of "$new")."
+        log "now running $(version_of "$new") on: ${names[*]}."
         return 0
     fi
+    local failed="$FAILED"
     if [ -n "$old" ]; then
-        log "$1 did not come up within $HEALTH_SECONDS s; going back to $(version_of "$old")."
+        log "$failed did not come up on $(version_of "$new") within $HEALTH_SECONDS s; going back to $(version_of "$old") on all servers."
         point current "$old"
-        restart_and_check "$old" || log "the old version does not come up either; see journalctl -u $SERVICE."
+        # shellcheck disable=SC2086 # FAILED is a list of names
+        restart_and_check restart "$old" "${names[@]}" || log "$FAILED does not come up on the old version either; $(journal_hint $FAILED)."
     fi
-    die "$2 to $(version_of "$new") failed; see journalctl -u $SERVICE."
+    # shellcheck disable=SC2086
+    die "$2 to $(version_of "$new") failed on $failed; $(journal_hint $failed)."
 }
 
 # the updater and the units from the version that now runs
@@ -339,6 +614,17 @@ cmd_check() {
     fi
 }
 
+list_table() {
+    local n state
+    printf '%-12s %-28s %-5s %-10s %-7s %s\n' NAME UNIT PORT STATE PLAYERS FILES
+    for n in $(servers); do
+        server_ports "$n"
+        state="$(systemctl is-active "$(unit_of "$n")" 2>/dev/null || true)"
+        printf '%-12s %-28s %-5s %-10s %-7s %s\n' "$n" "$(unit_of "$n")" "$PORT_GAME" "$state" \
+            "$(players_online "$n")" "$(dir_of "$n")"
+    done
+}
+
 cmd_status() {
     need_conf
     local have prev latest="" svc players
@@ -354,17 +640,26 @@ cmd_status() {
     else
         latest="not checked (UPDATE_CHECK=off)"
     fi
-    svc="$(systemctl is-active "$SERVICE" 2>/dev/null || true), $(systemctl is-enabled "$SERVICE" 2>/dev/null || echo "not installed")"
-    players="$(players_online)"
+    if self_managed; then
+        svc="none: you run the servers yourself (MANAGE=self), with $PREFIX/current/bin/armagetronad-dedicated"
+        if [ -n "$ONLINE_FILES" ]; then players="$(self_players) online (ONLINE_FILES)"; else players="unknown (no ONLINE_FILES)"; fi
+    else
+        svc="$SERVICE: $(systemctl is-active "$SERVICE" 2>/dev/null || true), $(systemctl is-enabled "$SERVICE" 2>/dev/null || echo "not installed")"
+        players="$(all_players) online"
+    fi
     cat <<EOF
 installed:    $have  ($PREFIX/current)
 previous:     $prev
 latest:       $latest
 auto-update:  $AUTO_UPDATE
 update check: $UPDATE_CHECK
-service:      $SERVICE: $svc
-players:      $players online
+service:      $svc
+players:      $players
 EOF
+    if ! self_managed; then
+        echo "servers:"
+        list_table | sed 's/^/  /'
+    fi
 }
 
 cmd_update() {
@@ -379,6 +674,9 @@ cmd_update() {
     done
     need_root update
     need_conf
+    if [ "$when_empty" = 1 ] && self_managed && [ -z "$ONLINE_FILES" ]; then
+        die "--when-empty needs ONLINE_FILES in $CONF: with MANAGE=self it cannot see who is online."
+    fi
     lock
 
     local have
@@ -411,12 +709,12 @@ cmd_update() {
     if [ "$when_empty" = 1 ]; then
         local deadline players waited=0
         deadline=$(( $(date +%s) + EMPTY_WAIT_HOURS * 3600 ))
-        while players="$(players_online)" && [ "$players" -gt 0 ]; do
+        while players="$(all_players)" && [ "$players" -gt 0 ]; do
             if [ "$(date +%s)" -ge "$deadline" ]; then
                 log "players stayed online; $RELEASE_VERSION is unpacked and goes in at the next try."
                 return 0
             fi
-            [ "$waited" = 1 ] || log "$players player(s) online; waiting for an empty server."
+            [ "$waited" = 1 ] || log "$players player(s) online; waiting until all servers are empty."
             waited=1
             sleep "$EMPTY_POLL_SECONDS"
         done
@@ -442,13 +740,16 @@ cmd_auto_update() {
         *) die "usage: retrocycles-server auto-update on|off" ;;
     esac
     [ -w "$CONF" ] || die "$CONF is missing; run ap.sh first."
+    if [ "$1" = on ] && self_managed && [ -z "$ONLINE_FILES" ]; then
+        die "auto-update stays off: with MANAGE=self the updater cannot see who is online, so it could restart your servers during a match. Set ONLINE_FILES in $CONF (the var/online_players.txt of each server) first."
+    fi
     if grep -q '^AUTO_UPDATE=' "$CONF"; then
         sed -i "s/^AUTO_UPDATE=.*/AUTO_UPDATE=$1/" "$CONF"
     else
         echo "AUTO_UPDATE=$1" >> "$CONF"
     fi
     if [ "$1" = on ]; then
-        log "auto-update on: once a day, while the server is empty, the latest release is installed."
+        log "auto-update on: once a day, while all servers are empty, the latest release is installed."
     else
         log "auto-update off."
     fi
@@ -459,18 +760,189 @@ cmd_auto_update() {
 cmd_daily() {
     cmd_check
     if [ "$AUTO_UPDATE" = on ]; then
+        if self_managed && [ -z "$ONLINE_FILES" ]; then
+            log "auto-update skipped: MANAGE=self needs ONLINE_FILES in $CONF."
+            return 0
+        fi
         cmd_update --yes --when-empty
     fi
 }
 
-# writes the systemd units (used by ap.sh and after an update)
+cmd_list() {
+    need_conf
+    need_managed list
+    list_table
+}
+
+# the starter settings of a new server; ap.sh writes the same block for the default server
+starter_config() { # starter_config <game port>
+    local g="$1"
+    cat <<EOF
+# Settings of this server; see HOSTING.md. Each server has its own ports.
+SERVER_PORT $g
+# the name in the server browser
+# SERVER_NAME My second server
+# WebRTC transport for browser clients; see HOSTING.md for the settings.
+WEBRTC_ENABLE 1
+# signalling WebSocket, plain ws:// on TCP $((g + 1)) (SERVER_PORT + 1), on every
+# interface (the default), so browser players can join by host:port with Direct Connect;
+# set 127.0.0.1 when only a local TLS reverse proxy (Caddy, nginx) should reach it
+# WEBRTC_SIGNAL_BIND 127.0.0.1
+# WEBRTC_SIGNAL_PORT $((g + 1))
+# ICE (browser game traffic): by default one UDP port shared by all browser players,
+# SERVER_PORT + 1000 (UDP $((g + 1000))); open it in the firewall. A range gives each player
+# its own port from it instead.
+# WEBRTC_PORT_MIN 50000
+# WEBRTC_PORT_MAX 50100
+# public IPv4 for hosts behind 1:1 NAT or a port forward
+# WEBRTC_PUBLIC_IP 203.0.113.1
+EOF
+}
+
+cmd_add() {
+    local name="" port=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --port) port="${2:-}"; shift 2 || shift ;;
+            -*) die "unknown option $1 (add <name> [--port N])" ;;
+            *) [ -z "$name" ] || die "usage: retrocycles-server add <name> [--port N]"; name="$1"; shift ;;
+        esac
+    done
+    [ -n "$name" ] || die "usage: retrocycles-server add <name> [--port N]"
+    need_root add
+    need_conf
+    need_managed add
+    [ "$name" != default ] || die "the name default is reserved for the first server."
+    valid_name "$name" || die "'$name' is not a valid name: 1 to 32 of a-z, 0-9 and -, starting with a letter or digit."
+    if [ -n "$port" ]; then
+        [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1024 ] && [ "$port" -le 64000 ] ||
+            die "--port needs a game port from 1024 to 64000."
+    fi
+    [ -x "$PREFIX/current/bin/armagetronad-dedicated" ] || die "no server version is installed; run ap.sh first."
+    lock
+    is_server "$name" && die "server $name exists already (retrocycles-server list)."
+
+    local dir="$SERVERS_DIR/$name" group clash kept=0
+    group="$(id -gn "$SERVER_USER")"
+    if [ -r "$dir/var/autoexec.cfg" ]; then
+        [ -z "$port" ] || die "$dir/var/autoexec.cfg exists already; set SERVER_PORT there instead of --port."
+        server_ports "$name"
+        port="$PORT_GAME"
+        clash="$(port_clash "$port" "$name")"
+        [ -z "$clash" ] || die "$name keeps its settings in $dir, but its game port $port clashes: $clash."
+        kept=1
+    elif [ -n "$port" ]; then
+        clash="$(port_clash "$port" "$name")"
+        [ -z "$clash" ] || die "game port $port needs UDP $port, TCP $((port + 1)) and UDP $((port + 1000)); $clash."
+    else
+        local p
+        for ((p = FIRST_PORT; p < FIRST_PORT + 1000; p++)); do
+            [ -n "$(port_clash "$p" "$name")" ] || { port="$p"; break; }
+        done
+        [ -n "$port" ] || die "no free game port from $FIRST_PORT to $((FIRST_PORT + 999)); use --port."
+    fi
+
+    [ -e "$UNIT_DIR/$SERVICE@.service" ] || cmd_install_service >/dev/null
+    install -d -o "$SERVER_USER" -g "$group" "$SERVERS_DIR" "$dir" "$dir/var"
+    if [ "$kept" = 0 ]; then
+        local tmp
+        tmp="$(mktemp)"
+        starter_config "$port" > "$tmp"
+        install -m 644 -o "$SERVER_USER" -g "$group" "$tmp" "$dir/var/autoexec.cfg"
+        rm -f "$tmp"
+    else
+        log "$dir/var/autoexec.cfg exists; keeping it."
+    fi
+    systemctl enable "$SERVICE@$name" >/dev/null 2>&1
+    log "starting $name (unit $SERVICE@$name, files in $dir)..."
+    restart_and_check restart "$PREFIX/current" "$name" ||
+        die "$name is added but does not come up within $HEALTH_SECONDS s; $(journal_hint "$name")."
+    server_ports "$name"
+    log "$name runs on game port $PORT_GAME. Open in the firewall: $(ports_text)."
+    log "its settings: $dir/var/autoexec.cfg (then: sudo retrocycles-server restart $name)"
+}
+
+cmd_remove() {
+    local name="" purge=0 yes=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --purge) purge=1 ;;
+            --yes|-y) yes=1 ;;
+            -*) die "unknown option $1 (remove <name> [--purge] [--yes])" ;;
+            *) [ -z "$name" ] || die "usage: retrocycles-server remove <name> [--purge] [--yes]"; name="$1" ;;
+        esac
+        shift
+    done
+    [ -n "$name" ] || die "usage: retrocycles-server remove <name> [--purge] [--yes]"
+    need_root remove
+    need_conf
+    need_managed remove
+    [ "$name" != default ] || die "the default server cannot be removed (stop it: sudo retrocycles-server stop default)."
+    valid_name "$name" || die "'$name' is not a valid server name."
+    lock
+    local dir="$SERVERS_DIR/$name"
+    is_server "$name" || [ "$purge" = 1 ] && [ -d "$dir" ] || die "there is no server $name (retrocycles-server list)."
+    systemctl disable --now "$SERVICE@$name" >/dev/null 2>&1 || true
+    systemctl reset-failed "$SERVICE@$name" >/dev/null 2>&1 || true
+    log "$name is stopped and removed from the list."
+    if [ "$purge" = 1 ] && [ -d "$dir" ]; then
+        if [ "$yes" = 0 ]; then
+            [ -t 0 ] || die "delete $dir: add --yes to confirm. Its files are still there."
+            read -r -p "Delete $dir with all settings and logs of $name? [y/N] " answer
+            [[ "$answer" =~ ^[yY] ]] || { log "kept its files in $dir."; return 0; }
+        fi
+        rm -rf "$dir"
+        log "deleted $dir."
+    else
+        log "its files stay in $dir; sudo retrocycles-server add $name brings it back."
+    fi
+}
+
+cmd_control() { # cmd_control <start|stop|restart> <name|all>
+    local verb="$1" target="${2:-}" names=() n
+    [ -n "$target" ] || die "usage: retrocycles-server $verb <name>|all"
+    need_root "$verb"
+    need_conf
+    need_managed "$verb"
+    lock
+    if [ "$target" = all ]; then
+        mapfile -t names < <(servers)
+    else
+        is_server "$target" || die "there is no server $target (retrocycles-server list)."
+        names=("$target")
+    fi
+    [ ${#names[@]} -gt 0 ] || die "there are no servers."
+    case "$verb" in
+        stop)
+            for n in "${names[@]}"; do systemctl stop "$(unit_of "$n")"; done
+            log "stopped: ${names[*]}. They start again at the next boot (remove keeps a server off)." ;;
+        start)
+            local todo=()
+            for n in "${names[@]}"; do
+                if server_active "$n"; then log "$n is running already."; else todo+=("$n"); fi
+            done
+            [ ${#todo[@]} -gt 0 ] || return 0
+            # shellcheck disable=SC2086
+            restart_and_check start "$PREFIX/current" "${todo[@]}" || die "$FAILED did not come up; $(journal_hint $FAILED)."
+            log "running: ${todo[*]}." ;;
+        restart)
+            # shellcheck disable=SC2086
+            restart_and_check restart "$PREFIX/current" "${names[@]}" || die "$FAILED did not come up; $(journal_hint $FAILED)."
+            log "restarted: ${names[*]}." ;;
+    esac
+}
+
+# writes the systemd units (used by ap.sh and after an update); with MANAGE=self only the
+# daily update timer
 cmd_install_service() {
     need_root install-service
     need_conf
-    local group svc_tmp changed=0
+    local group svc_tmp changed=0 units=()
     group="$(id -gn "$SERVER_USER")"
     svc_tmp="$(mktemp -d)"
-    cat > "$svc_tmp/$SERVICE.service" <<EOF
+    if ! self_managed; then
+        units=("$SERVICE.service" "$SERVICE@.service")
+        cat > "$svc_tmp/$SERVICE.service" <<EOF
 [Unit]
 Description=Retrocycles dedicated server
 Documentation=https://github.com/nanubula/retrocycles.io/blob/server/web/docs/HOSTING.md
@@ -493,6 +965,32 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+        # the other servers: retrocycles-server@<name>, files in $SERVERS_DIR/<name>
+        cat > "$svc_tmp/$SERVICE@.service" <<EOF
+[Unit]
+Description=Retrocycles dedicated server %i
+Documentation=https://github.com/nanubula/retrocycles.io/blob/server/web/docs/HOSTING.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$SERVER_USER
+Group=$group
+WorkingDirectory=$SERVERS_DIR/%i
+ExecStartPre=mkdir -p $SERVERS_DIR/%i/var
+ExecStartPre=touch $SERVERS_DIR/%i/var/input.txt
+# the update notice; never stops the start
+ExecStartPre=-$SELF_PATH check --at-start
+ExecStart=$PREFIX/current/bin/armagetronad-dedicated --daemon --userdatadir $SERVERS_DIR/%i --vardir $SERVERS_DIR/%i/var --input $SERVERS_DIR/%i/var/input.txt
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    fi
+    units+=("$SERVICE-update.service" "$SERVICE-update.timer")
     cat > "$svc_tmp/$SERVICE-update.service" <<EOF
 [Unit]
 Description=Retrocycles server update check (and auto-update when on)
@@ -516,7 +1014,7 @@ Persistent=true
 WantedBy=timers.target
 EOF
     local f
-    for f in "$SERVICE.service" "$SERVICE-update.service" "$SERVICE-update.timer"; do
+    for f in "${units[@]}"; do
         if ! cmp -s "$svc_tmp/$f" "$UNIT_DIR/$f"; then
             install -m 644 "$svc_tmp/$f" "$UNIT_DIR/$f"
             changed=1
@@ -524,14 +1022,14 @@ EOF
     done
     rm -rf "$svc_tmp"
     [ "$changed" = 1 ] && systemctl daemon-reload
-    systemctl enable "$SERVICE.service" >/dev/null 2>&1
+    self_managed || systemctl enable "$SERVICE.service" >/dev/null 2>&1
     systemctl enable --now "$SERVICE-update.timer" >/dev/null 2>&1
     [ "${1:-}" = --refresh ] && [ "$changed" = 1 ] && log "service units updated; they apply at the next restart."
     return 0
 }
 
 usage() {
-    sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-}" in
@@ -540,6 +1038,10 @@ case "${1:-}" in
     update) shift; cmd_update "$@" ;;
     rollback) shift; cmd_rollback "$@" ;;
     auto-update) shift; cmd_auto_update "$@" ;;
+    list) shift; cmd_list "$@" ;;
+    add) shift; cmd_add "$@" ;;
+    remove) shift; cmd_remove "$@" ;;
+    start|stop|restart) cmd_control "$1" "${2:-}" ;;
     daily) shift; cmd_daily "$@" ;;
     install-service) shift; cmd_install_service "$@" ;;
     switch) shift; need_root switch; need_conf; lock; switch_to "${1:?usage: switch <version dir>}" update start; prune ;;

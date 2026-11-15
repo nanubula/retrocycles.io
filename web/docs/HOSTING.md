@@ -24,10 +24,16 @@ sudo AP_USER=arma bash ap.sh
 
 `ap.sh` installs the latest release (a prebuilt, signed tarball; nothing is compiled) into
 `/home/arma/armagetronad`, the updater `retrocycles-server` and a systemd service
-`retrocycles-server`, writes a starter `~/.armagetronad-dedicated/var/autoexec.cfg` and starts
-the server. Its settings, logs and state live in `/home/arma/.armagetronad-dedicated`. Running
-`ap.sh` again updates. `sudo AP_USER=arma bash ap.sh --from-source` builds the source instead
-(10-20 minutes; also what it does on other architectures).
+`retrocycles-server`, writes a starter `~/servers/default/var/autoexec.cfg` and starts
+the server. Its settings, logs and state live in `/home/arma/servers/default`. (Older installs
+keep theirs in `~/.armagetronad-dedicated`; read that path for
+`~/servers/default` in this guide.) Running `ap.sh` again updates.
+`sudo AP_USER=arma bash ap.sh --from-source` builds the source instead (10-20 minutes; also what
+it does on other architectures).
+
+One machine can run several servers: `sudo retrocycles-server add <name>` adds one with its own
+settings and ports (section 7, "Several servers on one machine"). To start the servers with your
+own scripts instead, install with `MANAGE=self` (section 7, "Managing the servers yourself").
 
 The release tarballs (`retrocycles-server-<version>-linux-<arch>.tar.gz` on the GitHub
 releases page) run from any directory: `bin/armagetronad-dedicated`, with libdatachannel in
@@ -242,10 +248,12 @@ on all your servers. Each server has its own **server id**.
    ```
 
    The lines are the same on all your servers, except `PLATFORM_SERVER_ID`.
-3. Add the lines to `~/.armagetronad-dedicated/var/autoexec.cfg` (Docker:
-   `/data/var/autoexec.cfg`) and make the file readable only by the server's user:
-   `chmod 600 autoexec.cfg`. Then restart the server (`sudo systemctl restart retrocycles-server`,
-   or restart the container).
+3. Add the lines to the server's own `var/autoexec.cfg`: `~/servers/default/var/autoexec.cfg`
+   for the first server, `~/servers/<name>/var/autoexec.cfg` for a server you added (section 7),
+   `/data/var/autoexec.cfg` in Docker. Make the file readable only by the server's user:
+   `chmod 600 autoexec.cfg`. Then restart the server (`sudo retrocycles-server restart <name>`,
+   or `default` for the first one; or restart the container). Only a server with these lines
+   goes on the list, so a test server without them stays off it.
 4. At start the console says `Platform: reporting to https://api.retrocycles.io as server <id>`,
    followed by `login tokens accepted, chat checked, sanctions on, reports on`. The server then
    sends us a heartbeat every 10 seconds. When we see the heartbeats, we put the server on the
@@ -297,8 +305,8 @@ An update downloads the tarball for your machine from the GitHub releases of
 and unpacks it next to the old one (`~/armagetronad/versions/<version>`; `current` points at the
 one that runs). With players online it warns them in game 30 seconds before the restart. Then
 it restarts the service and checks that the new version came up; if it does not within a minute,
-the old version is put back and restarted. Your settings and state in `~/.armagetronad-dedicated`
-are never touched. Re-running `ap.sh` does the same.
+the old version is put back and restarted. Your settings and state in `~/servers` are never
+touched. Re-running `ap.sh` does the same.
 
 **Auto-update** (off by default): `sudo retrocycles-server auto-update on`. A daily systemd timer
 (`retrocycles-server-update.timer`) then installs a newer release, but only while nobody is
@@ -312,7 +320,7 @@ releases API (api.github.com, nothing else) for the latest release and writes
 there is one. `UPDATE_CHECK=off` in `/etc/retrocycles-server.conf` turns it off. That file also
 holds `AUTO_UPDATE` and the user and paths `ap.sh` set up; it is kept when `ap.sh` runs again.
 
-The service runs the server with `--input ~/.armagetronad-dedicated/var/input.txt`: a line
+The service runs the server with `--input ~/servers/default/var/input.txt`: a line
 appended to that file is a console command (`echo "SAY hello" >> .../var/input.txt`), which is
 how the updater warns players.
 
@@ -343,6 +351,104 @@ docker run -d --name watchtower -v /var/run/docker.sock:/var/run/docker.sock \
 
 Watchtower restarts without warning players, so schedule it for a quiet hour. The update notice
 and auto-update above are for `ap.sh` installs only.
+
+### Several servers on one machine
+
+All servers of an `ap.sh` install use the same binary (`~/armagetronad/current`). Each server has
+its own directory with its own settings, logs and ports. The first server is `default`: the
+service `retrocycles-server`, files in `~/servers/default`, game port 4534. Each other server is
+the service `retrocycles-server@<name>`, with files in `~/servers/<name>`.
+
+| Command | |
+|---|---|
+| `retrocycles-server list` | every server: name, service, game port, state, players online, directory |
+| `sudo retrocycles-server add <name>` | a new server; `--port <N>` sets its game port |
+| `sudo retrocycles-server remove <name>` | stop the server and take it off the list; its files stay |
+| `sudo retrocycles-server start` / `stop` / `restart <name>` | one server, or `all` |
+
+A name is 1 to 32 characters: `a-z`, `0-9` and `-`, not `-` first. The name `default` is reserved.
+
+`add` writes a starter `~/servers/<name>/var/autoexec.cfg` with `SERVER_PORT` and the
+`WEBRTC_*` settings, starts the server and checks that it comes up. Then it tells you the three
+ports to open. Without `--port` it takes the lowest free game port from 4534. A game port `N`
+needs UDP `N`, TCP `N` + 1 and UDP `N` + 1000 (section 3). `add` makes sure that no other server
+and no other program uses them, and it refuses a `--port` that clashes.
+
+`remove <name>` keeps the directory and tells you where it is; `add <name>` later brings the
+server back with its old settings. `remove <name> --purge` also deletes the directory, after a
+question (`--yes` skips it). `stop` lasts until the next boot; to keep a server off, remove it.
+
+Each server has its own `autoexec.cfg`. Only servers with the `PLATFORM_*` lines go on the
+Retrocycles server list (section 6); a test server without them stays off it.
+
+An update or rollback applies to all servers. It warns the players on each server that has
+players, restarts every server that runs, and checks each one. A stopped server stays stopped and
+runs the new version at its next start. If one server does not come up, all servers go back to
+the old version, and the updater tells you which server failed. Auto-update and
+`update --when-empty` wait until all servers are empty at the same time.
+
+The updater of releases 1 and 2 can stop after an update before it installs the new updater.
+The server then runs the new release, but these commands are missing. If
+`retrocycles-server list` says that it does not know the command, run `ap.sh` again once.
+
+### Managing the servers yourself
+
+Some operators start their servers with their own scripts, for example the community scripts
+that keep servers in `~/armagetronad/servers/<name>` and start them with `scripts/boot.sh`. For
+them, install with `MANAGE=self`:
+
+```sh
+sudo AP_USER=arma MANAGE=self bash ap.sh
+```
+
+`ap.sh` then installs the release and the updater, but no server service, and it starts nothing.
+Your scripts start `~/armagetronad/current/bin/armagetronad-dedicated`. Each server needs its
+three ports (section 3). If `~/armagetronad/bin` does not exist, `ap.sh` makes it a link to
+`current/bin`, so scripts that start `~/armagetronad/bin/armagetronad-dedicated` find the release
+there. If `~/armagetronad/bin` is a real directory (an older build), `ap.sh` does not change it.
+To use the release, set `tron="$HOME/armagetronad/current/bin/armagetronad-dedicated"` in
+`scripts/srv.sh`.
+
+`sudo retrocycles-server update` and `rollback` install the version and point `current` at it.
+They do not restart your servers, unless you set these lines in `/etc/retrocycles-server.conf`:
+
+```sh
+# run as the server's user after an update or rollback; it must return (screen, tmux, nohup)
+RESTART_CMD='cd ~/armagetronad/scripts && . boot.sh'
+# the online_players.txt of your servers: needed for --when-empty and auto-update
+ONLINE_FILES='/home/arma/armagetronad/servers/*/var/online_players.txt'
+# the --input files of your servers, for the warning before the restart
+INPUT_FILES='/home/arma/armagetronad/servers/*/var/input.txt'
+```
+
+Without `RESTART_CMD` the updater tells you to restart your servers. They run the old version
+until then. With `RESTART_CMD`, the updater counts the processes that run the old binary and runs
+the command. Then, within a minute, as many processes must run the new binary and none the old
+one. If not, the updater points `current` back and runs the command again. With players online it
+warns them first, but only if `INPUT_FILES` is set (your servers then need `--input <file>`).
+Auto-update stays off without `ONLINE_FILES`: the updater cannot see who plays, so it could
+restart your servers during a match. `list`, `add`, `remove`, `start`, `stop` and `restart` are
+not available in this mode.
+
+To let the updater run the servers later, run `ap.sh` again without `MANAGE=self`. Stop your own
+servers first, or give them game ports that the new `default` server (4534) does not use. To go
+the other way, disable the services first; `ap.sh` tells you which.
+
+### Beside an older sty+ct+ap install
+
+The community `ap.sh` also installs into `~/armagetronad`. Our `ap.sh` never changes the `bin`,
+`servers` and `scripts` directories of that install, or its servers. There are three ways to run
+both:
+
+- **Separate unix users** (recommended): install ours for a new user (`adduser arma2`, then
+  `AP_USER=arma2`). They share nothing.
+- **The same user**: this works. `PREFIX=/home/arma/retrocycles` keeps our versions apart from
+  the old install. Give each server its own game port; `add` skips the ports of the servers in
+  `~/armagetronad/servers`.
+- **`MANAGE=self`**: your old scripts start our binary. The servers keep their settings, and
+  browser players can join them.
+
+Old sty+ct+ap servers take desktop players only. They cannot be on the Retrocycles server list.
 
 ## Notes
 
