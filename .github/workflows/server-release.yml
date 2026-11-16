@@ -171,7 +171,7 @@ jobs:
           Retrocycles dedicated server $version: sty+ct+ap with browser players (WebRTC).
 
           **Install** (Ubuntu 22.04 / Debian 12 or newer, x86_64 or arm64):
-          \`sudo USER=<unix user> bash ap.sh\` with [web/install/ap.sh]($src/web/install/ap.sh).
+          \`sudo AP_USER=<unix user> bash ap.sh\` with [web/install/ap.sh]($src/web/install/ap.sh).
 
           **Update** an installed server: \`sudo retrocycles-server update\`.
 
@@ -184,7 +184,7 @@ jobs:
           minisign -Vm SHA256SUMS -P $public_key
           sha256sum -c --ignore-missing SHA256SUMS
           \`\`\`
-          Built from the source of this tag; runtime packages: \`libxml2 libzthread-2.3-2 libssl3 libcurl4 ca-certificates\`.
+          Built from the source of this tag; runtime packages: \`libzthread-2.3-2 libssl3 libcurl4 ca-certificates\` (on Ubuntu 24.04, Debian 13 and newer: \`libzthread-2.3-2t64 libssl3t64 libcurl4t64\`).
           EOF
 
       - name: Publish

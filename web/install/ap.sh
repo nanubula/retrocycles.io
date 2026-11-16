@@ -125,7 +125,8 @@ esac
 
 as_user() { sudo -u "$TARGET_USER" -H env HOME="$HOME_DIR" "$@"; }
 
-# first of the given package names this distribution has (Ubuntu 24.04 renamed some to *t64)
+# first of the given package names this distribution has (Ubuntu 24.04 and newer renamed some
+# to *t64)
 pkg() {
     local p
     for p in "$@"; do
@@ -174,11 +175,12 @@ echo "== user: $TARGET_USER, prefix: $PREFIX, $([ "$FROM_SOURCE" = 1 ] && echo "
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 # the updater's tools (minisign where the distribution has it, else openssl checks the
-# signatures; ss finds free ports) and the server's runtime libraries
+# signatures; ss finds free ports) and the server's runtime libraries (libxml2 is linked into
+# the release; a build from source gets it with libxml2-dev)
 MINISIGN="$(pkg minisign 2>/dev/null || echo openssl)"
 apt-get install -y --no-install-recommends \
     sudo ca-certificates curl jq openssl iproute2 "$MINISIGN" \
-    libxml2 "$(pkg libzthread-2.3-2 libzthread-2.3-2t64)" "$(pkg libssl3 libssl3t64)" \
+    "$(pkg libzthread-2.3-2 libzthread-2.3-2t64)" "$(pkg libssl3 libssl3t64)" \
     "$(pkg libcurl4 libcurl4t64)"
 if [ "$FROM_SOURCE" = 1 ]; then
     apt-get install -y --no-install-recommends \
@@ -356,6 +358,17 @@ if [ -n "$COMMUNITY_PORTS" ]; then
     OLD_HINT="$OLD_HINT
    Note:     $COMMUNITY_DIR holds servers of the community scripts:$COMMUNITY_PORTS.
              They are not changed. Give each server its own game port."
+fi
+# libxml2 2.15 and newer have no HTTP client: a source build then cannot download maps or
+# check global logins (the release links its own libxml2 2.14)
+if [ "$FROM_SOURCE" = 1 ] && command -v xml2-config >/dev/null 2>&1; then
+    XML_VERSION="$(xml2-config --version)"
+    if [ "$(printf '%s\n' 2.15 "$XML_VERSION" | sort -V | head -n 1)" = 2.15 ]; then
+        OLD_HINT="$OLD_HINT
+   WARNING:  this build uses libxml2 $XML_VERSION, which has no HTTP client: the server cannot
+             download maps or check global logins. Install the release instead (ap.sh without
+             --from-source)."
+    fi
 fi
 
 if [ "$MANAGE" = self ]; then

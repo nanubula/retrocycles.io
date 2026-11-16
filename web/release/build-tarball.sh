@@ -15,14 +15,22 @@
 # The sources are `git archive` of GIT_REF (default: HEAD plus uncommitted changes to tracked
 # files), so line endings are the repository's even on a Windows checkout. The tarball holds a
 # relocatable install (bin/, lib/, share/, etc/): libdatachannel is bundled in lib/ and the
-# binary finds it through an $ORIGIN rpath. Runtime packages on the target (Debian/Ubuntu):
-#   libxml2 libzthread-2.3-2 libssl3 libcurl4 ca-certificates
-# (t64 names on Ubuntu 24.04: libzthread-2.3-2t64 libssl3t64 libcurl4t64).
+# binary finds it through an $ORIGIN rpath. libxml2 is linked in statically, because the
+# distributions ship different sonames (libxml2.so.2 on Ubuntu 24.04 and Debian 13,
+# libxml2.so.16 on Ubuntu 26.04). Runtime packages on the target (Debian/Ubuntu):
+#   libzthread-2.3-2 libssl3 libcurl4 ca-certificates
+# (t64 names on Ubuntu 24.04, Debian 13 and newer: libzthread-2.3-2t64 libssl3t64 libcurl4t64).
 set -euo pipefail
 
 LDC_VERSION="${LDC_VERSION:-v0.24.5}"
 # the commit that tag names; a moved tag stops the build
 LDC_COMMIT="${LDC_COMMIT:-443f6934d9007eb7076ab7825ba330f355fcbead}"
+
+# libxml2, static. 2.14 is the last series with the HTTP client (xmlNanoHTTP), which the
+# server uses for authentication and resource downloads; 2.15 removed it.
+# The sum is from download.gnome.org (libxml2-<version>.sha256sum).
+LIBXML2_VERSION="2.14.6"
+LIBXML2_SHA256="7ce458a0affeb83f0b55f1f4f9e0e55735dbfc1a9de124ee86fb4a66b597203a"
 
 # configure flags of the release; web/docker/server.Dockerfile uses the same
 CONFIGURE_FLAGS=(
@@ -36,10 +44,26 @@ in_container() {
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
     apt-get install -y --no-install-recommends \
-        autoconf automake libtool pkg-config bison patch bzip2 make g++ python3 git ca-certificates \
-        libxml2-dev libzthread-dev libboost-dev libprotobuf-dev protobuf-compiler \
+        autoconf automake libtool pkg-config bison patch bzip2 xz-utils make g++ python3 git \
+        ca-certificates curl libzthread-dev libboost-dev libprotobuf-dev protobuf-compiler \
         cmake ninja-build libssl-dev libcurl4-openssl-dev patchelf
     local jobs="${JOBS:-$(nproc)}"
+
+    # libxml2, static only, with the HTTP client; no Python, ICU, zlib or lzma (the server
+    # reads plain map files and DTDs)
+    local xml_series="${LIBXML2_VERSION%.*}"
+    curl -fsSL -o /tmp/libxml2.tar.xz \
+        "https://download.gnome.org/sources/libxml2/$xml_series/libxml2-$LIBXML2_VERSION.tar.xz"
+    if ! echo "$LIBXML2_SHA256  /tmp/libxml2.tar.xz" | sha256sum -c -; then
+        echo "libxml2 $LIBXML2_VERSION does not match its sum; stopping." >&2
+        exit 1
+    fi
+    tar -C /tmp -xJf /tmp/libxml2.tar.xz
+    (cd "/tmp/libxml2-$LIBXML2_VERSION" &&
+        ./configure --prefix=/opt/libxml2 --disable-shared --enable-static --with-pic \
+            --with-http --without-python --without-icu --without-zlib --without-lzma \
+            --without-readline --without-history &&
+        make -j"$jobs" && make install)
 
     # libdatachannel, DataChannel + WebSocket only
     git clone --depth 1 --branch "$LDC_VERSION" --recursive \
@@ -72,10 +96,20 @@ in_container() {
     local prefix="/opt/$name"
 
     mkdir -p /build && cd /build
+    # configure finds libxml2 by pkg-config; the static library needs its private libs too
+    local xml_pc=/opt/libxml2/lib/pkgconfig
     /src/configure --prefix="$prefix" "${CONFIGURE_FLAGS[@]}" \
-        --with-libdatachannel=/opt/libdatachannel
+        --with-libdatachannel=/opt/libdatachannel \
+        PKG_CONFIG_PATH="$xml_pc" \
+        XML2_CFLAGS="$(PKG_CONFIG_PATH="$xml_pc" pkg-config --cflags libxml-2.0)" \
+        XML2_LIBS="$(PKG_CONFIG_PATH="$xml_pc" pkg-config --static --libs libxml-2.0)"
     make -j"$jobs"
     make install-strip
+    if readelf -d "$prefix/bin/armagetronad-dedicated" | grep -F NEEDED | grep -q libxml2; then
+        readelf -d "$prefix/bin/armagetronad-dedicated" | grep -F NEEDED
+        echo "the server links libxml2 dynamically; stopping." >&2
+        exit 1
+    fi
 
     # bundle libdatachannel next to the binary
     mkdir -p "$prefix/lib"

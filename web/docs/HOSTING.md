@@ -14,7 +14,8 @@ desktop ------------------------- UDP -------------------> your server, UDP <gam
 
 ## 1. Install
 
-The quickest way, on Ubuntu 22.04 / Debian 12 or newer (x86_64 or arm64) with systemd:
+The quickest way, on Ubuntu 22.04, 24.04 or 26.04 or Debian 12 or newer (x86_64 or arm64) with
+systemd:
 
 ```sh
 sudo adduser --disabled-password arma          # the unix user that runs the server
@@ -29,7 +30,9 @@ the server. Its settings, logs and state live in `/home/arma/servers/default`. (
 keep theirs in `~/.armagetronad-dedicated`; read that path for
 `~/servers/default` in this guide.) Running `ap.sh` again updates.
 `sudo AP_USER=arma bash ap.sh --from-source` builds the source instead (10-20 minutes; also what
-it does on other architectures).
+it does on other architectures). Do not build from source on Ubuntu 26.04: its libxml2 (2.15)
+has no HTTP client, so such a server cannot download maps or check global logins. The release
+has its own libxml2 and works there.
 
 One machine can run several servers: `sudo retrocycles-server add <name>` adds one with its own
 settings and ports (section 7, "Several servers on one machine"). To start the servers with your
@@ -37,8 +40,9 @@ own scripts instead, install with `MANAGE=self` (section 7, "Managing the server
 
 The release tarballs (`retrocycles-server-<version>-linux-<arch>.tar.gz` on the GitHub
 releases page) run from any directory: `bin/armagetronad-dedicated`, with libdatachannel in
-`lib/`. They need these packages: `libxml2 libzthread-2.3-2 libssl3 libcurl4 ca-certificates`
-(on Ubuntu 24.04 and newer some end in `t64`: `libzthread-2.3-2t64 libssl3t64 libcurl4t64`).
+`lib/`. They need these packages: `libzthread-2.3-2 libssl3 libcurl4 ca-certificates`
+(on Ubuntu 24.04, Debian 13 and newer their names end in `t64`: `libzthread-2.3-2t64 libssl3t64
+libcurl4t64`). libxml2 is built into the binary, so it needs no libxml2 package.
 Each release has `SHA256SUMS` and `SHA256SUMS.minisig`; check a download by hand with
 
 ```sh
